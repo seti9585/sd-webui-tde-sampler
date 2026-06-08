@@ -390,7 +390,7 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
         m_sigma_max = self.model_wrap.sigmas[-1].item()
         sigma_min, sigma_max = (
             (0.1, 10)
-            if opts.use_old_karras_scheduler_sigmas
+            if getattr(opts, 'use_old_karras_scheduler_sigmas', False)
             else (m_sigma_min, m_sigma_max)
         )
 
@@ -466,8 +466,6 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(unet_patcher, x=x)
 
-        self.model_wrap.log_sigmas = self.model_wrap.log_sigmas.to(x.device)
-        self.model_wrap.sigmas     = self.model_wrap.sigmas.to(x.device)
 
         steps  = steps or p.steps
         sigmas = self.get_sigmas(p, steps).to(x.device)
@@ -514,8 +512,6 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(unet_patcher, x=x)
 
-        self.model_wrap.log_sigmas = self.model_wrap.log_sigmas.to(x.device)
-        self.model_wrap.sigmas     = self.model_wrap.sigmas.to(x.device)
 
         steps, t_enc = sd_samplers_common.setup_img2img_steps(p, steps)
         sigmas       = self.get_sigmas(p, steps).to(x.device)
