@@ -13,7 +13,7 @@ torchdiffeq ベースの ODE サンプラーを reForge に移植。
 - Script UI で Method・rtol・atol をその場で変更できる。
 
 【移植時の注意（Forge Neo 対応）】
-  reForge:  from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
+  reForge:  from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
   Forge Neo: from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
   ↑ この1行を差し替えるだけで Forge Neo でも動くはず。
 
@@ -462,7 +462,7 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                                   steps=steps, image_conditioning=image_conditioning,
                                   is_img2img=False)
 
-        from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
+        from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(unet_patcher, x=x)
 
@@ -510,7 +510,7 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                                   steps=steps, image_conditioning=image_conditioning,
                                   noise=noise, is_img2img=True)
 
-        from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
+        from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(unet_patcher, x=x)
 
