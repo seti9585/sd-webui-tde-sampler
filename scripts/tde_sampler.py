@@ -1,23 +1,23 @@
 """
-TDE Sampler — reForge 拡張機能
+TDE Sampler — reForge Extension
 ================================
-配置場所: extensions/tde-sampler/scripts/tde_sampler.py
+Location: extensions/tde-sampler/scripts/tde_sampler.py
 
-ComfyUI-ODE (https://github.com/redhottensors/ComfyUI-ODE) の
-torchdiffeq ベースの ODE サンプラーを reForge に移植。
+Port of the torchdiffeq-based ODE sampler from
+ComfyUI-ODE (https://github.com/redhottensors/ComfyUI-ODE) to reForge.
 
-【reForge 組み込みの ODE Custom との違い】
-- reForge の ODE Custom も同じ torchdiffeq を使用しているが、
-  この拡張機能は独立したサンプラーとして登録するため、
-  txt2img と hires.fix で別々のメソッドを選択可能。
-- Script UI で Method・rtol・atol をその場で変更できる。
+[Differences from reForge's built-in ODE Custom]
+- Although reForge's ODE Custom also uses torchdiffeq, this extension
+  registers as an independent sampler, allowing different methods to be
+  selected for txt2img and hires.fix.
+- Method, rtol, and atol can be changed on the fly via the Script UI.
 
-【移植時の注意（Forge Neo 対応）】
+[Note on Forge Neo compatibility]
   reForge:  from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
   Forge Neo: from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
-  ↑ この1行を差し替えるだけで Forge Neo でも動くはず。
+  (Both paths are now the same; this note is kept for reference.)
 
-依存:
+Dependencies:
   torchdiffeq  (pip install torchdiffeq)
 """
 
@@ -32,14 +32,14 @@ import torch
 from tqdm.auto import tqdm, trange
 
 # ---------------------------------------------------------------------------
-# rk_core と同様、拡張フォルダを sys.path に追加
+# Add extension directory to sys.path (same as rk_core)
 # ---------------------------------------------------------------------------
 _EXT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _EXT_DIR not in sys.path:
     sys.path.insert(0, _EXT_DIR)
 
 # ---------------------------------------------------------------------------
-# reForge コアモジュール
+# reForge core modules
 # ---------------------------------------------------------------------------
 from modules import sd_samplers_common, shared, script_callbacks
 from modules.shared import opts
@@ -47,7 +47,7 @@ from modules.shared import opts
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# torchdiffeq チェック
+# torchdiffeq availability check
 # ---------------------------------------------------------------------------
 try:
     import torchdiffeq
@@ -55,34 +55,34 @@ try:
 except ModuleNotFoundError:
     HAS_TORCHDIFFEQ = False
     logger.error(
-        "[TDE Sampler] torchdiffeq が見つかりません。pip install torchdiffeq を実行してください。"
+        "[TDE Sampler] torchdiffeq not found. Please run: pip install torchdiffeq"
     )
 
 # ---------------------------------------------------------------------------
-# MPS チェック
+# MPS availability check
 # ---------------------------------------------------------------------------
 HAS_MPS = torch.backends.mps.is_available()
 
 
 # ===========================================================================
-# Section 0: メソッド定義
+# Section 0: Method Definitions
 # ===========================================================================
 
 ADAPTIVE_SOLVERS = {"dopri8", "dopri5", "bosh3", "fehlberg2", "adaptive_heun"}
 FIXED_SOLVERS    = {"euler", "midpoint", "rk4", "heun3"}
 ALL_SOLVERS      = sorted([*ADAPTIVE_SOLVERS, *FIXED_SOLVERS])
 
-# opts キー
+# Options keys
 OPT_LOG_RTOL  = "tde_sampler_log_rtol"
 OPT_LOG_ATOL  = "tde_sampler_log_atol"
 OPT_MAX_STEPS = "tde_sampler_max_steps"
 
-# デフォルト値（reForge の ODE Custom に合わせる）
+# Default values (matching reForge's ODE Custom)
 DEF_LOG_RTOL  = -2.5
 DEF_LOG_ATOL  = -3.5
 DEF_MAX_STEPS = 250
 
-# ページロード時の強制更新用スライダー参照リスト
+# Slider references for forced update on page load
 _tde_max_steps_sliders = []
 
 
@@ -91,15 +91,15 @@ def _get(key, default):
 
 
 # ===========================================================================
-# Section 1: ODE 右辺関数（ComfyUI-ODE の ODEFunction を reForge 用に移植）
+# Section 1: ODE Right-Hand Side Function (ported from ComfyUI-ODE's ODEFunction)
 # ===========================================================================
 
 class TDEODEFunction:
     """
-    torchdiffeq.odeint から呼ばれる ODE の右辺関数。
-    バッチを1枚ずつ処理する（torchdiffeq の仕様）。
+    Right-hand side function of the ODE, called by torchdiffeq.odeint.
+    Processes one sample at a time (torchdiffeq specification).
 
-    probability flow ODE:
+    Probability flow ODE:
         dx/dσ = (x - D(x, σ)) / σ
     """
 
@@ -129,15 +129,15 @@ class TDEODEFunction:
     def __call__(self, t: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            t : scalar tensor  現在の sigma 値
-            y : (C*H*W,) tensor  現在の latent（flatten 済み、1枚分）
+            t : scalar tensor  current sigma value
+            y : (C*H*W,) tensor  current latent (flattened, single sample)
         Returns:
             dy/dt : (C*H*W,) tensor
         """
         if t <= 1e-5:
             return torch.zeros_like(y)
 
-        # torchdiffeq は1枚ずつ処理するので unsqueeze でバッチ次元を追加
+        # torchdiffeq processes one sample at a time; unsqueeze to add batch dimension
         denoised = self.model(
             y.unsqueeze(0),
             t.unsqueeze(0),
@@ -146,7 +146,7 @@ class TDEODEFunction:
         return (y - denoised.squeeze(0)) / t
 
     def callback_step(self, t0, y0, dt):
-        """固定ステップ: 各ステップ後に呼ばれる。"""
+        """Fixed step: called after each step."""
         if self.is_adaptive:
             return
 
@@ -157,7 +157,7 @@ class TDEODEFunction:
             self.pbar.set_postfix({"σ": f"{t0.item():.4f}"})
             self.pbar.refresh()
 
-        # cfg_denoiser.step を更新
+        # Update cfg_denoiser.step
         if self.cfg_denoiser is not None and hasattr(self.cfg_denoiser, "step"):
             total = getattr(self.cfg_denoiser, "total_steps", None)
             if total is not None:
@@ -168,7 +168,7 @@ class TDEODEFunction:
         self.step += 1
 
     def callback_accept_step(self, t0, y0, dt):
-        """適応ステップ: 採択ステップ後に呼ばれる。"""
+        """Adaptive step: called after each accepted step."""
         if not self.is_adaptive:
             return
 
@@ -184,7 +184,7 @@ class TDEODEFunction:
             self.pbar.set_postfix({"σ": f"{t0.item():.4f}"})
             self.pbar.refresh()
 
-        # cfg_denoiser.step を更新
+        # Update cfg_denoiser.step
         if self.cfg_denoiser is not None and hasattr(self.cfg_denoiser, "step"):
             total = getattr(self.cfg_denoiser, "total_steps", None)
             if total is not None:
@@ -210,7 +210,7 @@ class TDEODEFunction:
 
 
 # ===========================================================================
-# Section 2: コアサンプリング関数
+# Section 2: Core Sampling Function
 # ===========================================================================
 
 def _run_tde_sampler(
@@ -226,9 +226,9 @@ def _run_tde_sampler(
     max_steps: int  = DEF_MAX_STEPS,
 ):
     """
-    torchdiffeq.odeint を使って ODE を解く。
-    ComfyUI-ODE の ODESampler.__call__() に相当。
-    バッチを1枚ずつ処理する。
+    Solve the ODE using torchdiffeq.odeint.
+    Equivalent to ComfyUI-ODE's ODESampler.__call__().
+    Processes one sample at a time.
     """
     is_adaptive = solver in ADAPTIVE_SOLVERS
     t_max   = sigmas.max()
@@ -236,10 +236,10 @@ def _run_tde_sampler(
     n_steps = len(sigmas)
     batch   = x.shape[0]
 
-    # torchdiffeq の dtype 設定
+    # dtype setting for torchdiffeq
     ode_dtype = torch.float32 if HAS_MPS else torch.float64
 
-    # sigma スケジュール（固定ステップ）or [t_max, t_min]（適応ステップ）
+    # sigma schedule (fixed steps) or [t_max, t_min] (adaptive steps)
     if not is_adaptive:
         t = sigmas.to(dtype=ode_dtype)
     else:
@@ -279,7 +279,7 @@ def _run_tde_sampler(
             )
 
             try:
-                # 固定ステップ法と適応ステップ法でオプションを分ける
+                # Separate options for fixed and adaptive step methods
                 if is_adaptive:
                     odeint_options = {
                         "min_step":      1e-5,
@@ -304,10 +304,10 @@ def _run_tde_sampler(
                 pbar.update(pbar.total - pbar.n)
 
             except sd_samplers_common.InterruptedException:
-                logger.debug("[TDE Sampler] 中断されました（InterruptedException）")
+                logger.debug("[TDE Sampler] Interrupted (InterruptedException)")
                 samples[i] = x[i]
 
-    # 最終コールバック
+    # Final callback
     if callback is not None:
         callback({
             "x":         samples,
@@ -321,11 +321,11 @@ def _run_tde_sampler(
 
 
 # ===========================================================================
-# Section 3: reForge Sampler ラッパークラス
+# Section 3: reForge Sampler Wrapper Class
 # ===========================================================================
 
 class TDEMethodSampler(sd_samplers_common.Sampler):
-    """1つの solver に対応する reForge サンプラー。"""
+    """reForge sampler for a single solver."""
 
     def __init__(self, sd_model, solver: str):
         super().__init__(lambda *a, **k: None)
@@ -450,13 +450,13 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                steps=None, image_conditioning=None):
         solver = getattr(p, "_tde_txt2img_solver", USE_SAME)
 
-        # 「→ RK Sampler」が選ばれているとき RK Sampler に委譲
+        # Delegate to RK Sampler when TO_RK is selected
         if solver == TO_RK:
             return self._delegate_to_rk(p, x, conditioning, unconditional_conditioning,
                                         steps=steps, image_conditioning=image_conditioning,
                                         is_img2img=False)
 
-        # 「Use same sampler」のとき reForge のデフォルトサンプラーに委譲
+        # Delegate to the default sampler when USE_SAME is selected
         if solver == USE_SAME:
             return self._delegate(p, x, conditioning, unconditional_conditioning,
                                   steps=steps, image_conditioning=image_conditioning,
@@ -496,13 +496,13 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                        steps=None, image_conditioning=None):
         solver = getattr(p, "_tde_hr_solver", USE_SAME)
 
-        # 「→ RK Sampler」が選ばれているとき RK Sampler に委譲
+        # Delegate to RK Sampler when TO_RK is selected
         if solver == TO_RK:
             return self._delegate_to_rk(p, x, conditioning, unconditional_conditioning,
                                         steps=steps, image_conditioning=image_conditioning,
                                         noise=noise, is_img2img=True)
 
-        # 「Use same sampler」のとき reForge のデフォルトサンプラーに委譲
+        # Delegate to the default sampler when USE_SAME is selected
         if solver == USE_SAME:
             return self._delegate(p, x, conditioning, unconditional_conditioning,
                                   steps=steps, image_conditioning=image_conditioning,
@@ -547,7 +547,7 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
 
     def _delegate(self, p, x, conditioning, unconditional_conditioning,
                   steps=None, image_conditioning=None, noise=None, is_img2img=False):
-        """「Use same sampler」のとき reForge のデフォルトサンプラーに委譲。"""
+        """Delegate to reForge's default sampler when 'Use same sampler' is selected."""
         from modules import sd_samplers
         fallback_name = getattr(opts, "sampler_name", None) or "Euler"
         sampler = sd_samplers.create_sampler(fallback_name, shared.sd_model)
@@ -563,7 +563,7 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
 
     def _delegate_to_rk(self, p, x, conditioning, unconditional_conditioning,
                         steps=None, image_conditioning=None, noise=None, is_img2img=False):
-        """「→ RK Sampler」のとき RK Sampler に委譲。"""
+        """Delegate to RK Sampler when '→ RK Sampler' is selected."""
         from modules import sd_samplers
         sampler = sd_samplers.create_sampler("RK Sampler", shared.sd_model)
         if is_img2img:
@@ -578,11 +578,11 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
 
 
 # ===========================================================================
-# Section 4: Script UI — 統合サンプラー「TDE Sampler」
+# Section 4: Script UI — Unified Sampler "TDE Sampler"
 # ===========================================================================
 
 class TDEScriptSampler(TDEMethodSampler):
-    """「TDE Sampler」ドロップダウン用。Script UI のメソッド選択と連携する。"""
+    """For the "TDE Sampler" dropdown. Integrates with Script UI method selection."""
 
     def __init__(self, sd_model):
         super().__init__(sd_model, "euler")
@@ -590,7 +590,7 @@ class TDEScriptSampler(TDEMethodSampler):
 
 
 # ===========================================================================
-# Section 5: Settings タブ UI
+# Section 5: Settings Tab UI
 # ===========================================================================
 
 def _on_ui_settings():
@@ -602,7 +602,7 @@ def _on_ui_settings():
         component=gr.Slider,
         component_args={"minimum": -7.0, "maximum": 0.0, "step": 0.5},
         section=section,
-    ).info("ae_* メソッドで有効。小さいほど精密・低速。"))
+    ).info("Effective for ae_* methods. Smaller = more precise but slower."))
 
     shared.opts.add_option(OPT_LOG_ATOL, shared.OptionInfo(
         default=DEF_LOG_ATOL,
@@ -610,7 +610,7 @@ def _on_ui_settings():
         component=gr.Slider,
         component_args={"minimum": -7.0, "maximum": 0.0, "step": 0.5},
         section=section,
-    ).info("ae_* メソッドで有効。小さいほど精密・低速。"))
+    ).info("Effective for ae_* methods. Smaller = more precise but slower."))
 
     shared.opts.add_option(OPT_MAX_STEPS, shared.OptionInfo(
         default=DEF_MAX_STEPS,
@@ -618,14 +618,14 @@ def _on_ui_settings():
         component=gr.Slider,
         component_args={"minimum": 1, "maximum": 5000, "step": 1},
         section=section,
-    ).info("適応ステップの上限。reForge ODE Custom のデフォルトは 250。"))
+    ).info("Upper limit for adaptive steps. Default for reForge ODE Custom is 250."))
 
 
 script_callbacks.on_ui_settings(_on_ui_settings)
 
 
 # ===========================================================================
-# Section 6: サンプラー登録
+# Section 6: Sampler Registration
 # ===========================================================================
 
 USE_SAME    = "Use same sampler"
@@ -638,7 +638,7 @@ def _register():
 
     added = 0
 
-    # 「TDE Sampler」— Script UI と連携する統合サンプラー
+    # "TDE Sampler" — unified sampler integrated with Script UI
     tde_script_data = sd_samplers_common.SamplerData(
         name        = "TDE Sampler",
         constructor = lambda sd_model: TDEScriptSampler(sd_model),
@@ -653,7 +653,7 @@ def _register():
     sd_samplers.set_samplers()
     if added > 0:
         logger.warning(
-            "[TDE Sampler] %d サンプラーを登録しました (torchdiffeq=%s)",
+            "[TDE Sampler] Registered %d sampler(s) (torchdiffeq=%s)",
             added, HAS_TORCHDIFFEQ
         )
 
@@ -668,21 +668,21 @@ def _on_model_loaded(sd_model):
         )
     except Exception:
         import traceback
-        logger.error("[TDE Sampler] on_model_loaded エラー:\n%s", traceback.format_exc())
+        logger.error("[TDE Sampler] on_model_loaded error:\n%s", traceback.format_exc())
 
 
 script_callbacks.on_model_loaded(_on_model_loaded)
 
 try:
     _register()
-    logger.warning("[TDE Sampler] 起動時登録完了")
+    logger.warning("[TDE Sampler] Startup registration complete")
 except Exception:
     import traceback
-    logger.error("[TDE Sampler] 登録エラー:\n%s", traceback.format_exc())
+    logger.error("[TDE Sampler] Registration error:\n%s", traceback.format_exc())
 
 
 # ===========================================================================
-# Section 7: Script クラス — 生成タブの Script ペインに UI を追加
+# Section 7: Script Class — adds UI to the Script pane in the generation tab
 # ===========================================================================
 
 try:
@@ -722,7 +722,7 @@ try:
                         value=DEF_LOG_ATOL,
                         label="Log Absolute Tolerance (10^x)",
                     )
-                with gr.Accordion("拡張設定", open=False):
+                with gr.Accordion("Advanced Settings", open=False):
                     max_steps = gr.Slider(
                         minimum=1, maximum=5000, step=1,
                         value=_get(OPT_MAX_STEPS, DEF_MAX_STEPS),
@@ -734,7 +734,7 @@ try:
 
         def process(self, p,
                     enabled, txt2img_solver, hr_solver, log_rtol, log_atol, max_steps):
-            # 無効のときは何もしない
+            # Do nothing when disabled
             if not enabled:
                 return
 
@@ -748,8 +748,8 @@ except ImportError:
     pass
 
 
-# ページロード時にスライダーを Settings の値で強制更新する
-# Gradio 3.x のキャッシュ問題を回避するために demo.load イベントを使う
+# Force-update sliders to Settings values on page load
+# Use demo.load event to work around Gradio 3.x caching issues
 def _on_app_started(demo, app):
     if not _tde_max_steps_sliders:
         return
@@ -759,10 +759,10 @@ def _on_app_started(demo, app):
             return [val] * len(_tde_max_steps_sliders)
         with demo:
             demo.load(fn=_get_max_steps, inputs=[], outputs=_tde_max_steps_sliders)
-        logger.warning("[TDE Sampler] demo.load 登録完了: %d スライダー", len(_tde_max_steps_sliders))
+        logger.warning("[TDE Sampler] demo.load registered: %d slider(s)", len(_tde_max_steps_sliders))
     except Exception:
         import traceback
-        logger.error("[TDE Sampler] demo.load 登録エラー:\n%s", traceback.format_exc())
+        logger.error("[TDE Sampler] demo.load registration error:\n%s", traceback.format_exc())
 
 
 script_callbacks.on_app_started(_on_app_started)
