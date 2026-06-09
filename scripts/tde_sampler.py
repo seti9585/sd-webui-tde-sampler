@@ -90,6 +90,46 @@ def _get(key, default):
     return getattr(opts, key, default)
 
 
+# ---------------------------------------------------------------------------
+# Flow Matching detection and noise injection helpers  [patched]
+# ---------------------------------------------------------------------------
+
+def _is_flow_matching(model_wrap):
+    # Check whether the loaded model uses Flow Matching
+    # (Anima/DiT, FLUX, SD3, ...) or standard DDPM/EDM (SDXL, SD1.5, ...).
+    #
+    # Strategy 1: inspect the model_sampling class name.
+    # Strategy 2: fallback - Flow Matching models have sigma_max <= 1.0,
+    #             while DDPM/EDM models have sigma_max ~ 14.6.
+    #             Using 1.5 as a safe threshold.
+    #
+    # NOTE: detection uses model_wrap.sigmas[-1] (the model's inherent sigma
+    # table maximum), NOT sigma_sched[0] (which varies with denoising_strength).
+    # This guarantees correct behaviour at all denoising_strength values.
+    inner = getattr(model_wrap, 'inner_model', model_wrap)
+    ms = getattr(inner, 'model_sampling', None)
+    if ms is not None:
+        ms_type = type(ms).__name__
+        if any(kw in ms_type for kw in ('Flow', 'Flux')):
+            return True
+    sigs = getattr(model_wrap, 'sigmas', None)
+    if sigs is not None and len(sigs) > 0:
+        return sigs[-1].item() <= 1.5
+    return False
+
+
+def _flow_aware_noise_injection(x, noise, sigma, model_wrap):
+    # Apply the correct noise injection for the model type.
+    #
+    # Flow Matching: x_t = (1 - t) * x + t * noise   (linear interpolation)
+    # DDPM / EDM:    x_t = x + sigma * noise           (additive)
+    if _is_flow_matching(model_wrap):
+        t = sigma.clamp(0.0, 1.0)
+        return (1.0 - t) * x + t * noise
+    return x + noise * sigma
+
+
+
 # ===========================================================================
 # Section 1: ODE Right-Hand Side Function (ported from ComfyUI-ODE's ODEFunction)
 # ===========================================================================
@@ -518,7 +558,7 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
         sigma_sched  = sigmas[steps - t_enc - 1:]
 
         x  = x.to(noise)
-        xi = x + noise * sigma_sched[0]
+        xi = _flow_aware_noise_injection(x, noise, sigma_sched[0], self.model_wrap)
 
         if opts.img2img_extra_noise > 0:
             p.extra_generation_params["Extra noise"] = opts.img2img_extra_noise
