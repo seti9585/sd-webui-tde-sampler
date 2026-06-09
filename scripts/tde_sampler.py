@@ -502,7 +502,10 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                                   steps=steps, image_conditioning=image_conditioning,
                                   is_img2img=False)
 
-        from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
+        try:
+            from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
+        except ModuleNotFoundError:
+            from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(unet_patcher, x=x)
 
@@ -548,7 +551,10 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                                   steps=steps, image_conditioning=image_conditioning,
                                   noise=noise, is_img2img=True)
 
-        from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
+        try:
+            from backend.sampling.sampling_function import sampling_prepare, sampling_cleanup
+        except ModuleNotFoundError:
+            from modules_forge.forge_sampler import sampling_prepare, sampling_cleanup
         unet_patcher = self.model_wrap.inner_model.forge_objects.unet
         sampling_prepare(unet_patcher, x=x)
 
