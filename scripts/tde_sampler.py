@@ -78,8 +78,8 @@ OPT_LOG_ATOL  = "tde_sampler_log_atol"
 OPT_MAX_STEPS = "tde_sampler_max_steps"
 
 # Default values (matching reForge's ODE Custom)
-DEF_LOG_RTOL  = -2.5
-DEF_LOG_ATOL  = -3.5
+DEF_LOG_RTOL  = -3.0   # matches reForge ODE Custom default
+DEF_LOG_ATOL  = -4.0   # matches reForge ODE Custom default
 DEF_MAX_STEPS = 250
 
 # Slider references for forced update on page load
@@ -177,7 +177,27 @@ class TDEODEFunction:
         if t <= 1e-5:
             return torch.zeros_like(y)
 
-        # torchdiffeq processes one sample at a time; unsqueeze to add batch dimension
+        # torchdiffeq processes one sample at a time; unsqueeze to add batch dimension.
+        #
+        # The ODE solver may integrate in float64 (adaptive methods on CUDA).
+        # All denoising model internals and pre-/post-CFG hooks (SkimmedCFG,
+        # Mahiro CFG, AutomaticCFG, etc.) expect float32 tensors.  Passing
+        # float64 latents causes dtype mismatches in hook computations —
+        # sign-based mask comparisons (SkimmedCFG) produce incorrect masks at
+        # high CFG values, leading to corrupted images.
+        #
+        # Cast to float32 for the model call; convert the result back to the
+        # ODE dtype so the integration remains numerically consistent.
+        if y.dtype != torch.float32:
+            y_fp32 = y.to(dtype=torch.float32)
+            t_fp32 = t.to(dtype=torch.float32)
+            denoised = self.model(
+                y_fp32.unsqueeze(0),
+                t_fp32.unsqueeze(0),
+                **self.extra_args
+            )
+            return (y - denoised.squeeze(0).to(dtype=y.dtype)) / t
+
         denoised = self.model(
             y.unsqueeze(0),
             t.unsqueeze(0),
@@ -276,8 +296,19 @@ def _run_tde_sampler(
     n_steps = len(sigmas)
     batch   = x.shape[0]
 
-    # dtype setting for torchdiffeq
-    ode_dtype = torch.float32 if HAS_MPS else torch.float64
+    # Dtype for ODE integration.
+    # Adaptive solvers (dopri5, bosh3, etc.) use float64 on CUDA for accurate
+    # per-step error estimation.  Fixed-step solvers (euler, rk4, heun3, etc.)
+    # use float32 to match standard k-diffusion behaviour: float64 integration
+    # accumulates rounding differences over the sigma schedule and produces
+    # sparkle / grain artifacts, most visible in hires.fix passes where the
+    # sigma range is small.
+    if HAS_MPS:
+        ode_dtype = torch.float32
+    elif is_adaptive:
+        ode_dtype = torch.float64
+    else:
+        ode_dtype = torch.float32
 
     # sigma schedule (fixed steps) or [t_max, t_min] (adaptive steps)
     if not is_adaptive:
