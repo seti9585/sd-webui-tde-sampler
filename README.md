@@ -81,6 +81,25 @@ dx/dσ = (x − D(x, σ)) / σ
 
 ---
 
+## Solver Reference
+
+Adaptive solvers automatically adjust step size to meet the tolerance targets (`rtol` / `atol`).  
+Fixed-step solvers use the WebUI step count as-is.
+
+| Method | Order | Type | Notes |
+|---|---|---|---|
+| `dopri5` | 5 | Adaptive | Dormand-Prince; well-balanced general-purpose solver |
+| `dopri8` | 8 | Adaptive | Higher-order variant of dopri5; more precise, slower |
+| `bosh3` | 3 | Adaptive | Bogacki-Shampine; lightweight, good for loose tolerances |
+| `fehlberg2` | 2 | Adaptive | Low-order; fast but less precise |
+| `adaptive_heun` | 2 | Adaptive | Heun-based; simplest adaptive solver |
+| `euler` | 1 | Fixed | Simplest method; fastest per step |
+| `midpoint` | 2 | Fixed | Slightly smoother than Euler |
+| `rk4` | 4 | Fixed | Classical Runge-Kutta; good quality at moderate step counts |
+| `heun3` | 3 | Fixed | Heun's 3rd-order method |
+
+---
+
 ---
 
 # 日本語
@@ -162,6 +181,25 @@ dx/dσ = (x − D(x, σ)) / σ
 ```
 
 `D(x, σ)` はノイズレベル σ におけるモデルの denoised latent 予測値。
+
+---
+
+## ソルバー詳細
+
+適応ステップ法は `rtol` / `atol` の目標値を満たすようにステップ幅を自動調整します。  
+固定ステップ法は WebUI のステップ数をそのまま使用します。
+
+| メソッド | 次数 | 種類 | 特徴 |
+|---|---|---|---|
+| `dopri5` | 5 | 適応 | Dormand-Prince 法。バランスの取れた汎用ソルバー |
+| `dopri8` | 8 | 適応 | dopri5 の高次版。より精度が高いが低速 |
+| `bosh3` | 3 | 適応 | Bogacki-Shampine 法。軽量で許容誤差を緩くできる |
+| `fehlberg2` | 2 | 適応 | 低次。高速だが精度は低め |
+| `adaptive_heun` | 2 | 適応 | Heun 法ベース。最もシンプルな適応ソルバー |
+| `euler` | 1 | 固定 | 最もシンプル。1ステップあたりの計算が最速 |
+| `midpoint` | 2 | 固定 | Euler より若干なめらか |
+| `rk4` | 4 | 固定 | 古典的 Runge-Kutta 法。固定ステップの中では高品質 |
+| `heun3` | 3 | 固定 | Heun の 3 次法 |
 
 ---
 
