@@ -1,5 +1,4 @@
-# TDE Sampler 数学的検証サマリー（別会話への引き継ぎ用）
-
+# TDE Sampler 数学的検証サマリー
 ## 対象
 
 - リポジトリ: `tde-sampler`（ComfyUI-ODE を reForge / Forge Neo 向けに移植した独立サンプラー拡張）
