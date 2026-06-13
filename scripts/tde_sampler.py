@@ -807,6 +807,20 @@ try:
                     )
                     _tde_max_steps_sliders.append(max_steps)
 
+                # Disable saving/restoring these sliders to ui-config.json.
+                # They have no elem_id, so WebUI (modules/ui_loadsave.py)
+                # persists their values to ui-config.json keyed by label and,
+                # on startup, restores them over the code-defined `value`.
+                # As a result, reinstalling the extension keeps stale values
+                # (e.g. -2.5 / -3.5) instead of the code defaults
+                # (DEF_LOG_RTOL=-3.0 / DEF_LOG_ATOL=-4.0). Setting
+                # do_not_save_to_config skips both saving and restoring, so the
+                # code `value` is always used. Runtime adjustments are still
+                # passed via p._tde_log_rtol etc. in process(), so generation
+                # is unaffected.
+                for _slider in (log_rtol, log_atol):
+                    _slider.do_not_save_to_config = True
+
             return [enabled, txt2img_solver, hr_solver, log_rtol, log_atol, max_steps]
 
         def process(self, p,
