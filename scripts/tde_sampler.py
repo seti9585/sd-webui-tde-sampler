@@ -500,9 +500,11 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
         log_atol  = getattr(p, "_tde_log_atol",  _get(OPT_LOG_ATOL,  DEF_LOG_ATOL))
         max_steps = int(getattr(p, "_tde_max_steps", _get(OPT_MAX_STEPS, DEF_MAX_STEPS)))
 
-        p.extra_generation_params["TDE solver"]   = _solver
-        p.extra_generation_params["TDE log_rtol"] = log_rtol
-        p.extra_generation_params["TDE log_atol"] = log_atol
+        # NOTE: infotext metadata is written centrally in TDESamplerScript.process()
+        # (Section 7), not here. Writing it per-pass used to overwrite the
+        # txt2img value with the hires.fix value under the same "TDE solver" key
+        # whenever hires.fix was used, which broke PNG Info round-trip fidelity.
+        # "TDE max_steps" was also missing from this per-pass write entirely.
 
         return _run_tde_sampler(
             solver      = _solver,
@@ -821,6 +823,29 @@ try:
                 for _slider in (log_rtol, log_atol):
                     _slider.do_not_save_to_config = True
 
+            # Infotext round-trip (PNG Info -> Send to txt2img / img2img).
+            # There is no dedicated enabled key; the metadata write in process()
+            # below always includes "TDE solver" whenever the accordion was
+            # enabled, so its presence means ON. The Enable checkbox is bound
+            # through a callable because infotext paste leaves a component
+            # untouched when its key is absent (Forge Neo -> gr.skip(), reForge
+            # -> gr.update() no-op); a bare key could never turn the accordion
+            # off. The callable resolves a missing key to False, forcing OFF
+            # for faithful same-seed reproduction when an image generated
+            # without TDE Sampler is sent.
+            #
+            # The metadata write itself lives in process(), not in the per-pass
+            # _run(), so that the txt2img and hires.fix solver selections are
+            # recorded under separate keys instead of one overwriting the other.
+            self.infotext_fields = [
+                (enabled,        lambda d: "TDE solver" in d),
+                (txt2img_solver, "TDE solver"),
+                (hr_solver,      "TDE hires solver"),
+                (log_rtol,       "TDE log_rtol"),
+                (log_atol,       "TDE log_atol"),
+                (max_steps,      "TDE max_steps"),
+            ]
+
             return [enabled, txt2img_solver, hr_solver, log_rtol, log_atol, max_steps]
 
         def process(self, p,
@@ -834,6 +859,17 @@ try:
             p._tde_log_rtol       = float(log_rtol)
             p._tde_log_atol       = float(log_atol)
             p._tde_max_steps      = int(max_steps)
+
+            # Record in infotext. Written once here (before the batch loop) so
+            # create_infotext() captures it for every saved image. txt2img and
+            # hires.fix solvers are recorded under separate keys so hires.fix
+            # no longer overwrites the txt2img value. "TDE max_steps" is now
+            # recorded too, which the previous per-pass write omitted.
+            p.extra_generation_params["TDE solver"]       = txt2img_solver
+            p.extra_generation_params["TDE hires solver"] = hr_solver
+            p.extra_generation_params["TDE log_rtol"]     = float(log_rtol)
+            p.extra_generation_params["TDE log_atol"]     = float(log_atol)
+            p.extra_generation_params["TDE max_steps"]    = int(max_steps)
 
 except ImportError:
     pass
