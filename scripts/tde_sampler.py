@@ -716,7 +716,7 @@ def _on_ui_settings():
         default=DEF_MAX_STEPS,
         label="Max ODE Steps",
         component=gr.Slider,
-        component_args={"minimum": 1, "maximum": 5000, "step": 1},
+        component_args={"minimum": 1, "maximum": 500, "step": 1},
         section=section,
     ).info("Upper limit for adaptive steps. Default for reForge ODE Custom is 250."))
 
@@ -837,7 +837,7 @@ try:
                     )
                 with gr.Accordion("Advanced Settings", open=False):
                     max_steps = gr.Slider(
-                        minimum=1, maximum=5000, step=1,
+                        minimum=1, maximum=500, step=1,
                         value=_get(OPT_MAX_STEPS, DEF_MAX_STEPS),
                         label="Max ODE Steps",
                     )
@@ -856,6 +856,32 @@ try:
                 for _slider in (txt2img_log_rtol, txt2img_log_atol,
                                 hires_log_rtol, hires_log_atol):
                     _slider.do_not_save_to_config = True
+
+            # PNG infotext round-trip (Send to txt2img / img2img).
+            # Keys must match those written in add_infotext(), where solver and
+            # tolerances are already recorded per pass ("TDE solver" for txt2img,
+            # "TDE hires solver" for hires), so the two sets of controls restore
+            # independently.
+            #
+            # enabled uses a callable: a bare key string can never force the
+            # accordion OFF, because paste leaves a component untouched when its
+            # key is absent. Returning False on a missing key forces OFF when a
+            # PNG generated without TDE Sampler is pasted. Presence of either
+            # solver key means it was on.
+            #
+            # max_steps is intentionally omitted: it lives under Advanced
+            # Settings, is not written to infotext, and was never meant to be
+            # round-tripped.
+            self.infotext_fields = [
+                (enabled, lambda d: ("TDE solver" in d)
+                                    or ("TDE hires solver" in d)),
+                (txt2img_solver,   "TDE solver"),
+                (hr_solver,        "TDE hires solver"),
+                (txt2img_log_rtol, "TDE log_rtol"),
+                (txt2img_log_atol, "TDE log_atol"),
+                (hires_log_rtol,   "TDE hires log_rtol"),
+                (hires_log_atol,   "TDE hires log_atol"),
+            ]
 
             return [enabled, txt2img_solver, hr_solver,
                     txt2img_log_rtol, txt2img_log_atol,
