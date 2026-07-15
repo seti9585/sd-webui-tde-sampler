@@ -544,14 +544,22 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                steps=None, image_conditioning=None):
         solver = getattr(p, "_tde_txt2img_solver", USE_SAME)
 
-        # Delegate to RK Sampler when TO_RK is selected
+        # Delegate to RK Sampler when TO_RK is selected.
+        # Record the UI selection BEFORE delegating: delegated runs never reach
+        # _run(), which is where the "TDE solver" key is normally written, so
+        # without this the PNG would carry no record of the delegation and
+        # paste could not restore the dropdown to "→ RK Sampler".
         if solver == TO_RK:
+            p.extra_generation_params["TDE solver"] = solver
             return self._delegate_to_rk(p, x, conditioning, unconditional_conditioning,
                                         steps=steps, image_conditioning=image_conditioning,
                                         is_img2img=False)
 
-        # Delegate to the default sampler when USE_SAME is selected
+        # Delegate to the default sampler when USE_SAME is selected.
+        # Recorded for the same reason: the PNG should carry the actual UI
+        # selection for every delegation path, not only for solver-run passes.
         if solver == USE_SAME:
+            p.extra_generation_params["TDE solver"] = solver
             return self._delegate(p, x, conditioning, unconditional_conditioning,
                                   steps=steps, image_conditioning=image_conditioning,
                                   is_img2img=False)
@@ -593,14 +601,26 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                        steps=None, image_conditioning=None):
         solver = getattr(p, "_tde_hr_solver", USE_SAME)
 
-        # Delegate to RK Sampler when TO_RK is selected
+        # Key selection mirrors _run(): the hires pass writes "TDE hires solver",
+        # a plain img2img pass writes "TDE solver".
+        _solver_key = ("TDE hires solver" if getattr(p, "is_hr_pass", False)
+                       else "TDE solver")
+
+        # Delegate to RK Sampler when TO_RK is selected.
+        # Record the UI selection BEFORE delegating: delegated runs never reach
+        # _run(), so without this the PNG would carry no record of the
+        # delegation and paste could not restore the dropdown to "→ RK Sampler".
         if solver == TO_RK:
+            p.extra_generation_params[_solver_key] = solver
             return self._delegate_to_rk(p, x, conditioning, unconditional_conditioning,
                                         steps=steps, image_conditioning=image_conditioning,
                                         noise=noise, is_img2img=True)
 
-        # Delegate to the default sampler when USE_SAME is selected
+        # Delegate to the default sampler when USE_SAME is selected.
+        # Recorded for the same reason: every delegation path leaves the actual
+        # UI selection in the PNG.
         if solver == USE_SAME:
+            p.extra_generation_params[_solver_key] = solver
             return self._delegate(p, x, conditioning, unconditional_conditioning,
                                   steps=steps, image_conditioning=image_conditioning,
                                   noise=noise, is_img2img=True)
@@ -854,7 +874,8 @@ try:
                 # adjustments are still passed via p._tde_txt2img_log_rtol
                 # etc. in process(), so generation is unaffected.
                 for _slider in (txt2img_log_rtol, txt2img_log_atol,
-                                hires_log_rtol, hires_log_atol):
+                                hires_log_rtol, hires_log_atol,
+                                max_steps):
                     _slider.do_not_save_to_config = True
 
             # PNG infotext round-trip (Send to txt2img / img2img).
