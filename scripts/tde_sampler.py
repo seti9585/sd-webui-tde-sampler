@@ -287,6 +287,64 @@ class TDEODEFunction:
             self.pbar.reset()
 
 
+
+# ---------------------------------------------------------------------------
+# Sigma schedule sanitation  [patched]
+# ---------------------------------------------------------------------------
+
+def _sched_emit(msg: str) -> None:
+    # Emit schedule warnings on BOTH channels: Forge Neo suppresses
+    # module-level logger output, so the stderr print is required there,
+    # while reForge shows the logger line. Seeing the same line twice on
+    # reForge is an accepted cost of being visible on both backends.
+    logger.warning(msg)
+    print(msg, file=sys.stderr)
+
+
+def _sanitize_sigma_schedule(sigmas: torch.Tensor, context: str) -> torch.Tensor:
+    """Enforce a strictly decreasing sigma schedule.
+
+    Background: table-based schedulers (e.g. AYS) interpolate a small anchor
+    table up to the requested step count. On flow-matching models (Anima)
+    the sigma range is compressed to roughly [0, 1], and at high step counts
+    the interpolation can collapse adjacent steps to the same floating point
+    value near sigma_min. torchdiffeq rejects such arrays up front
+    ("t must be strictly increasing or decreasing"), and a zero-width step
+    would stall torchode's scheduled controller (t never advances).
+
+    Removing the collapsed entries preserves the exact set of distinct sigma
+    points, so the integration path is unchanged - the collapsed entries never
+    were resolvable steps in the first place.
+
+    Keeps the first element, then keeps each later element only if it is
+    strictly smaller than the last kept one (schedules in this pipeline are
+    always descending; do NOT sort). Returns the input unchanged when it is
+    already strictly decreasing.
+    """
+    n = sigmas.numel()
+    if n < 2:
+        return sigmas
+    vals = sigmas.tolist()
+    keep = [0]
+    last = vals[0]
+    for i in range(1, n):
+        if vals[i] < last:
+            keep.append(i)
+            last = vals[i]
+    if len(keep) == n:
+        return sigmas
+    dropped = n - len(keep)
+    kept = sigmas[torch.tensor(keep, dtype=torch.long, device=sigmas.device)]
+    _sched_emit(
+        f"[{context}] sigma schedule was not strictly decreasing: dropped "
+        f"{dropped} collapsed step(s) out of {n} (typical cause: table-based "
+        f"scheduler interpolated at a high step count on a compressed "
+        f"flow-matching sigma range); proceeding with {kept.numel() - 1} "
+        f"effective step(s)"
+    )
+    return kept
+
+
 # ===========================================================================
 # Section 2: Core Sampling Function
 # ===========================================================================
@@ -309,9 +367,6 @@ def _run_tde_sampler(
     Processes one sample at a time.
     """
     is_adaptive = solver in ADAPTIVE_SOLVERS
-    t_max   = sigmas.max()
-    t_min   = sigmas.min()
-    n_steps = len(sigmas)
     batch   = x.shape[0]
 
     # Dtype for ODE integration.
@@ -328,10 +383,32 @@ def _run_tde_sampler(
     else:
         ode_dtype = torch.float32
 
-    # sigma schedule (fixed steps) or [t_max, t_min] (adaptive steps)
+    # sigma schedule (fixed steps) or [t_max, t_min] (adaptive steps).
+    # [patched] Sanitize before handing the array to torchdiffeq, which
+    # rejects any non-strictly-monotonic schedule up front. Sanitation
+    # runs AFTER the dtype cast so value collapse introduced by the cast
+    # itself is also caught.
     if not is_adaptive:
-        t = sigmas.to(dtype=ode_dtype)
+        t = _sanitize_sigma_schedule(sigmas.to(dtype=ode_dtype), "TDE Sampler")
+        if t.numel() < 2:
+            _sched_emit(
+                "[TDE Sampler] degenerate sigma schedule "
+                "(fewer than 2 distinct values); returning input unchanged"
+            )
+            return x.clone()
+        t_max   = t[0]
+        t_min   = t[-1]
+        n_steps = t.numel()
     else:
+        t_max   = sigmas.max()
+        t_min   = sigmas.min()
+        n_steps = len(sigmas)
+        if not (t_max > t_min):
+            _sched_emit(
+                "[TDE Sampler] degenerate sigma schedule "
+                "(t_max <= t_min); returning input unchanged"
+            )
+            return x.clone()
         t = torch.stack([t_max, t_min]).to(dtype=ode_dtype)
 
     samples = torch.empty_like(x)
