@@ -69,8 +69,172 @@ HAS_MPS = torch.backends.mps.is_available()
 # ===========================================================================
 
 ADAPTIVE_SOLVERS = {"dopri8", "dopri5", "bosh3", "fehlberg2", "adaptive_heun"}
-FIXED_SOLVERS    = {"euler", "midpoint", "rk4", "heun3"}
+# Base fixed-step set = torchdiffeq built-ins that need no registration.
+# The classical RK4 ("kutta4") is added by _register_extra_fixed_solvers()
+# only on success, so a failed registration never leaves a dead dropdown entry.
+FIXED_SOLVERS    = {"euler", "midpoint", "heun3"}
+
+# ---------------------------------------------------------------------------
+# Extra fixed-step solvers registered into torchdiffeq's SOLVERS table
+# ---------------------------------------------------------------------------
+# torchdiffeq ships only euler / midpoint / rk4 / heun3 as fixed-step methods,
+# and its "rk4" is actually the Kutta 3/8-rule (rk4_alt_step_func: nodes 1/3
+# and 2/3, weights 1/8, 3/8, 3/8, 1/8), NOT the classical RK4. To align naming
+# with the RK Sampler suite (torchode, "fe_" prefix dropped), this block:
+#   - exposes the classical RK4 (weights 1/6, 1/3, 1/3, 1/6) under the dropdown
+#     label "kutta4" (matching RK Sampler's fe_kutta4), mapped internally to
+#     method string "tde_kutta4_classical";
+#   - exposes torchdiffeq's existing 3/8-rule class under the new name
+#     "kutta_38th4" (numerically identical to the previous TDE "rk4", since it
+#     reuses the very same class object);
+#   - adds ralston3 / ralston4 / wray3 / ssprk3.
+#
+# All Butcher tableaux match seti9585/sd-webui-rk-sampler exactly, so each name
+# is the torchdiffeq-path counterpart of the corresponding RK Sampler method.
+#
+# The dropdown no longer offers a bare "rk4" label at all: classical RK4 is
+# "kutta4" and the 3/8-rule is "kutta_38th4", so the ambiguous name is retired.
+#
+# Registration touches torchdiffeq._impl (a private API). It is wrapped in
+# try/except: on any failure "kutta4" and the other extras are simply not
+# offered (only euler / midpoint / heun3 remain as fixed options), so
+# generation never breaks. FIXED_SOLVERS is only extended for methods that
+# registered.
+#
+# NOTE ON INFOTEXT: the previous TDE build recorded "TDE solver: rk4" while
+# running the 3/8-rule. Such a value no longer matches any current dropdown
+# entry, so those PNGs will not restore the solver dropdown; select
+# "kutta_38th4" to reproduce the old 3/8-rule result, or "kutta4" for the
+# classical RK4. This is a one-time naming change and is intentional.
+
+# Dropdown label -> torchdiffeq method string (populated on successful register)
+_TDE_METHOD_ALIAS = {}
+
+
+def _register_extra_fixed_solvers():
+    """Register the extra fixed-step ERK solvers into torchdiffeq.
+
+    Returns the set of newly available dropdown names on success.
+    Raises on any failure (caller degrades gracefully).
+    """
+    import math as _math
+    from torchdiffeq._impl.odeint import SOLVERS as _TD_SOLVERS
+    from torchdiffeq._impl.solvers import FixedGridODESolver
+    from torchdiffeq._impl.misc import Perturb
+    from torchdiffeq._impl.fixed_grid import RK4 as _TdRK4ThreeEighths
+
+    _s5 = _math.sqrt(5.0)
+
+    # Butcher tableaux: c = nodes, a = strictly lower-triangular rows,
+    # b = weights. a[i] holds the i coefficients a_{i,0..i-1}.
+    _C_RK4 = [0.0, 0.5, 0.5, 1.0]
+    _A_RK4 = [[], [0.5], [0.0, 0.5], [0.0, 0.0, 1.0]]
+    _B_RK4 = [1 / 6, 1 / 3, 1 / 3, 1 / 6]
+
+    _C_R3 = [0.0, 0.5, 0.75]
+    _A_R3 = [[], [0.5], [0.0, 0.75]]
+    _B_R3 = [2 / 9, 1 / 3, 4 / 9]
+
+    _C_R4 = [0.0, 2 / 5, (14 - 3 * _s5) / 16, 1.0]
+    _A_R4 = [
+        [],
+        [2 / 5],
+        [(-2889 + 1428 * _s5) / 1024, (3785 - 1620 * _s5) / 1024],
+        [(-3365 + 2094 * _s5) / 6040, (-975 - 3046 * _s5) / 2552,
+         (467040 + 203968 * _s5) / 240845],
+    ]
+    _B_R4 = [
+        (263 + 24 * _s5) / 1812,
+        (125 - 1000 * _s5) / 3828,
+        (3426304 + 1661952 * _s5) / 5924787,
+        (30 - 4 * _s5) / 123,
+    ]
+
+    _C_W3 = [0.0, 8 / 15, 2 / 3]
+    _A_W3 = [[], [8 / 15], [1 / 4, 5 / 12]]
+    _B_W3 = [1 / 4, 0.0, 3 / 4]
+
+    _C_SSP = [0.0, 1.0, 0.5]
+    _A_SSP = [[], [1.0], [1 / 4, 1 / 4]]
+    _B_SSP = [1 / 6, 1 / 6, 2 / 3]
+
+    def _erk_step(func, t0, dt, t1, y0, c, a, b, f0, perturb):
+        # Generic explicit fixed-step Runge-Kutta increment for one step.
+        # Mirrors torchdiffeq's fixed_grid perturb convention: the first stage
+        # uses Perturb.NEXT, and any stage whose node equals 1.0 lands exactly
+        # on t1 with Perturb.PREV (endpoint discontinuity guard).
+        ks = [f0]
+        for i in range(1, len(c)):
+            yi = y0
+            row = a[i]
+            for j in range(i):
+                if row[j] != 0.0:
+                    yi = yi + (dt * row[j]) * ks[j]
+            if c[i] == 1.0:
+                fi = func(t1, yi, perturb=Perturb.PREV if perturb else Perturb.NONE)
+            else:
+                fi = func(t0 + dt * c[i], yi)
+            ks.append(fi)
+        total = (dt * b[0]) * ks[0]
+        for i in range(1, len(b)):
+            if b[i] != 0.0:
+                total = total + (dt * b[i]) * ks[i]
+        return total
+
+    def _make_solver(c, a, b, order_value):
+        class _FixedERK(FixedGridODESolver):
+            order = order_value
+
+            def _step_func(self, func, t0, dt, t1, y0):
+                f0 = func(t0, y0, perturb=Perturb.NEXT if self.perturb else Perturb.NONE)
+                return _erk_step(func, t0, dt, t1, y0, c, a, b, f0, self.perturb), f0
+
+        return _FixedERK
+
+    # Classical RK4 under an internal method name; the "kutta4" label maps here.
+    _TD_SOLVERS["tde_kutta4_classical"] = _make_solver(_C_RK4, _A_RK4, _B_RK4, 4)
+    # torchdiffeq's built-in RK4 class IS the 3/8-rule: reuse it directly so
+    # "kutta_38th4" is bit-identical to the previous TDE "rk4".
+    _TD_SOLVERS["kutta_38th4"] = _TdRK4ThreeEighths
+    _TD_SOLVERS["ralston3"] = _make_solver(_C_R3,  _A_R3,  _B_R3,  3)
+    _TD_SOLVERS["ralston4"] = _make_solver(_C_R4,  _A_R4,  _B_R4,  4)
+    _TD_SOLVERS["wray3"]    = _make_solver(_C_W3,  _A_W3,  _B_W3,  3)
+    _TD_SOLVERS["ssprk3"]   = _make_solver(_C_SSP, _A_SSP, _B_SSP, 3)
+
+    _TDE_METHOD_ALIAS["kutta4"] = "tde_kutta4_classical"
+    return {"kutta4", "kutta_38th4", "ralston3", "ralston4", "wray3", "ssprk3"}
+
+
+try:
+    _extra_fixed = _register_extra_fixed_solvers()
+    FIXED_SOLVERS |= _extra_fixed
+    logger.warning("[TDE Sampler] Registered extra fixed solvers: %s",
+                   ", ".join(sorted(_extra_fixed)))
+    print("[TDE Sampler] Registered extra fixed solvers: "
+          + ", ".join(sorted(_extra_fixed)), file=sys.stderr)
+except Exception:
+    import traceback
+    logger.error("[TDE Sampler] Extra solver registration failed:\n%s",
+                 traceback.format_exc())
+    print("[TDE Sampler] Extra solver registration failed; kutta4 and the "
+          "other extra methods are unavailable (euler/midpoint/heun3 remain)",
+          file=sys.stderr)
+
 ALL_SOLVERS      = sorted([*ADAPTIVE_SOLVERS, *FIXED_SOLVERS])
+
+
+def _tol_sliders_interactive(solver_value):
+    """Return whether the log_rtol / log_atol sliders should be interactive.
+
+    Tolerances only affect variable-step (adaptive) solvers, which use an
+    embedded error estimate to size each step. Fixed-step solvers ignore
+    rtol/atol entirely, and the USE_SAME / TO_RK dropdown choices delegate away
+    from TDE's ODE integration before any solving happens. So the sliders are
+    interactive only when an actual adaptive TDE solver is selected; in every
+    other case they are greyed out. Only the interactive flag changes here, the
+    stored slider values are never touched.
+    """
+    return solver_value in ADAPTIVE_SOLVERS
 
 # Options keys
 OPT_LOG_RTOL  = "tde_sampler_log_rtol"
@@ -287,64 +451,6 @@ class TDEODEFunction:
             self.pbar.reset()
 
 
-
-# ---------------------------------------------------------------------------
-# Sigma schedule sanitation  [patched]
-# ---------------------------------------------------------------------------
-
-def _sched_emit(msg: str) -> None:
-    # Emit schedule warnings on BOTH channels: Forge Neo suppresses
-    # module-level logger output, so the stderr print is required there,
-    # while reForge shows the logger line. Seeing the same line twice on
-    # reForge is an accepted cost of being visible on both backends.
-    logger.warning(msg)
-    print(msg, file=sys.stderr)
-
-
-def _sanitize_sigma_schedule(sigmas: torch.Tensor, context: str) -> torch.Tensor:
-    """Enforce a strictly decreasing sigma schedule.
-
-    Background: table-based schedulers (e.g. AYS) interpolate a small anchor
-    table up to the requested step count. On flow-matching models (Anima)
-    the sigma range is compressed to roughly [0, 1], and at high step counts
-    the interpolation can collapse adjacent steps to the same floating point
-    value near sigma_min. torchdiffeq rejects such arrays up front
-    ("t must be strictly increasing or decreasing"), and a zero-width step
-    would stall torchode's scheduled controller (t never advances).
-
-    Removing the collapsed entries preserves the exact set of distinct sigma
-    points, so the integration path is unchanged - the collapsed entries never
-    were resolvable steps in the first place.
-
-    Keeps the first element, then keeps each later element only if it is
-    strictly smaller than the last kept one (schedules in this pipeline are
-    always descending; do NOT sort). Returns the input unchanged when it is
-    already strictly decreasing.
-    """
-    n = sigmas.numel()
-    if n < 2:
-        return sigmas
-    vals = sigmas.tolist()
-    keep = [0]
-    last = vals[0]
-    for i in range(1, n):
-        if vals[i] < last:
-            keep.append(i)
-            last = vals[i]
-    if len(keep) == n:
-        return sigmas
-    dropped = n - len(keep)
-    kept = sigmas[torch.tensor(keep, dtype=torch.long, device=sigmas.device)]
-    _sched_emit(
-        f"[{context}] sigma schedule was not strictly decreasing: dropped "
-        f"{dropped} collapsed step(s) out of {n} (typical cause: table-based "
-        f"scheduler interpolated at a high step count on a compressed "
-        f"flow-matching sigma range); proceeding with {kept.numel() - 1} "
-        f"effective step(s)"
-    )
-    return kept
-
-
 # ===========================================================================
 # Section 2: Core Sampling Function
 # ===========================================================================
@@ -367,11 +473,19 @@ def _run_tde_sampler(
     Processes one sample at a time.
     """
     is_adaptive = solver in ADAPTIVE_SOLVERS
+    # Map the dropdown label to the torchdiffeq method string. Only "kutta4"
+    # differs (label "kutta4" -> classical RK4 registered as
+    # "tde_kutta4_classical"); every other label passes through unchanged.
+    # is_adaptive and the progress bar keep using the label for display.
+    method_str = _TDE_METHOD_ALIAS.get(solver, solver)
+    t_max   = sigmas.max()
+    t_min   = sigmas.min()
+    n_steps = len(sigmas)
     batch   = x.shape[0]
 
     # Dtype for ODE integration.
     # Adaptive solvers (dopri5, bosh3, etc.) use float64 on CUDA for accurate
-    # per-step error estimation.  Fixed-step solvers (euler, rk4, heun3, etc.)
+    # per-step error estimation.  Fixed-step solvers (euler, kutta4, heun3, etc.)
     # use float32 to match standard k-diffusion behaviour: float64 integration
     # accumulates rounding differences over the sigma schedule and produces
     # sparkle / grain artifacts, most visible in hires.fix passes where the
@@ -383,32 +497,10 @@ def _run_tde_sampler(
     else:
         ode_dtype = torch.float32
 
-    # sigma schedule (fixed steps) or [t_max, t_min] (adaptive steps).
-    # [patched] Sanitize before handing the array to torchdiffeq, which
-    # rejects any non-strictly-monotonic schedule up front. Sanitation
-    # runs AFTER the dtype cast so value collapse introduced by the cast
-    # itself is also caught.
+    # sigma schedule (fixed steps) or [t_max, t_min] (adaptive steps)
     if not is_adaptive:
-        t = _sanitize_sigma_schedule(sigmas.to(dtype=ode_dtype), "TDE Sampler")
-        if t.numel() < 2:
-            _sched_emit(
-                "[TDE Sampler] degenerate sigma schedule "
-                "(fewer than 2 distinct values); returning input unchanged"
-            )
-            return x.clone()
-        t_max   = t[0]
-        t_min   = t[-1]
-        n_steps = t.numel()
+        t = sigmas.to(dtype=ode_dtype)
     else:
-        t_max   = sigmas.max()
-        t_min   = sigmas.min()
-        n_steps = len(sigmas)
-        if not (t_max > t_min):
-            _sched_emit(
-                "[TDE Sampler] degenerate sigma schedule "
-                "(t_max <= t_min); returning input unchanged"
-            )
-            return x.clone()
         t = torch.stack([t_max, t_min]).to(dtype=ode_dtype)
 
     samples = torch.empty_like(x)
@@ -463,7 +555,7 @@ def _run_tde_sampler(
                     t,
                     rtol   = 10 ** log_rtol,
                     atol   = 10 ** log_atol,
-                    method = solver,
+                    method = method_str,
                     options= odeint_options,
                 )
                 samples[i] = result[-1].to(dtype=x.dtype)
@@ -621,22 +713,14 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                steps=None, image_conditioning=None):
         solver = getattr(p, "_tde_txt2img_solver", USE_SAME)
 
-        # Delegate to RK Sampler when TO_RK is selected.
-        # Record the UI selection BEFORE delegating: delegated runs never reach
-        # _run(), which is where the "TDE solver" key is normally written, so
-        # without this the PNG would carry no record of the delegation and
-        # paste could not restore the dropdown to "→ RK Sampler".
+        # Delegate to RK Sampler when TO_RK is selected
         if solver == TO_RK:
-            p.extra_generation_params["TDE solver"] = solver
             return self._delegate_to_rk(p, x, conditioning, unconditional_conditioning,
                                         steps=steps, image_conditioning=image_conditioning,
                                         is_img2img=False)
 
-        # Delegate to the default sampler when USE_SAME is selected.
-        # Recorded for the same reason: the PNG should carry the actual UI
-        # selection for every delegation path, not only for solver-run passes.
+        # Delegate to the default sampler when USE_SAME is selected
         if solver == USE_SAME:
-            p.extra_generation_params["TDE solver"] = solver
             return self._delegate(p, x, conditioning, unconditional_conditioning,
                                   steps=steps, image_conditioning=image_conditioning,
                                   is_img2img=False)
@@ -678,26 +762,14 @@ class TDEMethodSampler(sd_samplers_common.Sampler):
                        steps=None, image_conditioning=None):
         solver = getattr(p, "_tde_hr_solver", USE_SAME)
 
-        # Key selection mirrors _run(): the hires pass writes "TDE hires solver",
-        # a plain img2img pass writes "TDE solver".
-        _solver_key = ("TDE hires solver" if getattr(p, "is_hr_pass", False)
-                       else "TDE solver")
-
-        # Delegate to RK Sampler when TO_RK is selected.
-        # Record the UI selection BEFORE delegating: delegated runs never reach
-        # _run(), so without this the PNG would carry no record of the
-        # delegation and paste could not restore the dropdown to "→ RK Sampler".
+        # Delegate to RK Sampler when TO_RK is selected
         if solver == TO_RK:
-            p.extra_generation_params[_solver_key] = solver
             return self._delegate_to_rk(p, x, conditioning, unconditional_conditioning,
                                         steps=steps, image_conditioning=image_conditioning,
                                         noise=noise, is_img2img=True)
 
-        # Delegate to the default sampler when USE_SAME is selected.
-        # Recorded for the same reason: every delegation path leaves the actual
-        # UI selection in the PNG.
+        # Delegate to the default sampler when USE_SAME is selected
         if solver == USE_SAME:
-            p.extra_generation_params[_solver_key] = solver
             return self._delegate(p, x, conditioning, unconditional_conditioning,
                                   steps=steps, image_conditioning=image_conditioning,
                                   noise=noise, is_img2img=True)
@@ -913,11 +985,13 @@ try:
                         minimum=-7.0, maximum=0.0, step=0.5,
                         value=DEF_LOG_RTOL,
                         label="txt2img Log Relative Tolerance (10^x)",
+                        interactive=_tol_sliders_interactive(USE_SAME),
                     )
                     txt2img_log_atol = gr.Slider(
                         minimum=-7.0, maximum=0.0, step=0.5,
                         value=DEF_LOG_ATOL,
                         label="txt2img Log Absolute Tolerance (10^x)",
+                        interactive=_tol_sliders_interactive(USE_SAME),
                     )
                 with gr.Row():
                     hires_log_rtol = gr.Slider(
@@ -925,12 +999,14 @@ try:
                         value=DEF_LOG_RTOL,
                         label="hires.fix Log Relative Tolerance (10^x)",
                         visible=not is_img2img,
+                        interactive=_tol_sliders_interactive(USE_SAME),
                     )
                     hires_log_atol = gr.Slider(
                         minimum=-7.0, maximum=0.0, step=0.5,
                         value=DEF_LOG_ATOL,
                         label="hires.fix Log Absolute Tolerance (10^x)",
                         visible=not is_img2img,
+                        interactive=_tol_sliders_interactive(USE_SAME),
                     )
                 with gr.Accordion("Advanced Settings", open=False):
                     max_steps = gr.Slider(
@@ -951,9 +1027,36 @@ try:
                 # adjustments are still passed via p._tde_txt2img_log_rtol
                 # etc. in process(), so generation is unaffected.
                 for _slider in (txt2img_log_rtol, txt2img_log_atol,
-                                hires_log_rtol, hires_log_atol,
-                                max_steps):
+                                hires_log_rtol, hires_log_atol):
                     _slider.do_not_save_to_config = True
+
+                # Grey out the tolerance sliders when the selected solver does
+                # not use rtol/atol (fixed-step, USE_SAME, or TO_RK). The
+                # dropdown .change events cover live user edits; the sliders'
+                # creation-time `interactive` handles the initial page state for
+                # the default USE_SAME value. Values are preserved (only the
+                # interactive flag toggles), so switching back to an adaptive
+                # solver restores the previous numbers.
+                def _update_txt2img_tol(solver_value):
+                    state = _tol_sliders_interactive(solver_value)
+                    return (gr.update(interactive=state),
+                            gr.update(interactive=state))
+
+                def _update_hires_tol(solver_value):
+                    state = _tol_sliders_interactive(solver_value)
+                    return (gr.update(interactive=state),
+                            gr.update(interactive=state))
+
+                txt2img_solver.change(
+                    fn=_update_txt2img_tol,
+                    inputs=[txt2img_solver],
+                    outputs=[txt2img_log_rtol, txt2img_log_atol],
+                )
+                hr_solver.change(
+                    fn=_update_hires_tol,
+                    inputs=[hr_solver],
+                    outputs=[hires_log_rtol, hires_log_atol],
+                )
 
             # PNG infotext round-trip (Send to txt2img / img2img).
             # Keys must match those written in add_infotext(), where solver and
