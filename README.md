@@ -2,12 +2,12 @@
 
 **EN** | [日本語](#日本語)
 
-ODE sampler extension for Stable Diffusion WebUI (Forge-based),  
+ODE sampler extension for Stable Diffusion WebUI (reForge / Forge Neo),  
 powered by [torchdiffeq](https://github.com/rtqichen/torchdiffeq).
 
 Port of [ComfyUI-ODE](https://github.com/redhottensors/ComfyUI-ODE) by redhottensors.
 
-> Unlike reForge's built-in ODE Custom, this extension registers as an independent sampler,  
+> In reForge, this extension registers as an independent sampler, separate from the built-in ODE Custom,  
 > allowing different solvers to be selected for txt2img and hires.fix separately.
 
 ---
@@ -35,6 +35,13 @@ No other packages are needed beyond what is already included in your WebUI.
 
 > This extension relies on the Forge backend sampling functions.  
 > It is not available in A1111 (AUTOMATIC1111).
+
+---
+
+## Tested on
+
+- reForge, Python 3.10.11, PyTorch 2.9.0+cu128
+- Forge Neo 2.29.2, Python 3.13.12, PyTorch 2.13.0+cu130
 
 ---
 
@@ -171,11 +178,11 @@ TDE hires solver, TDE hires log_rtol, TDE hires log_atol
 
 **[English](#sd-webui-tde-sampler)** | 日本語
 
-[torchdiffeq](https://github.com/rtqichen/torchdiffeq) を使った ODE サンプラー拡張機能（Forge 系 WebUI 向け）。
+[torchdiffeq](https://github.com/rtqichen/torchdiffeq) を使った ODE サンプラー拡張機能（reForge / Forge Neo 向け）。
 
-[ComfyUI-ODE](https://github.com/redhottensors/ComfyUI-ODE)（redhottensors 作）を reForge 向けに移植。
+[ComfyUI-ODE](https://github.com/redhottensors/ComfyUI-ODE)（redhottensors 作）を Forge 系 WebUI 向けに移植。
 
-> reForge 組み込みの ODE Custom とは独立したサンプラーとして登録されるため、  
+> reForge では、組み込みの ODE Custom とは独立したサンプラーとして登録されるため、  
 > txt2img と hires.fix で異なるソルバーを選択できます。
 
 ---
@@ -203,6 +210,13 @@ WebUI に既に含まれるもの以外、追加パッケージは不要です�
 
 > 本拡張機能は Forge バックエンドの sampling 関数に依存します。  
 > A1111（AUTOMATIC1111）では使用できません。
+
+---
+
+## 動作確認環境
+
+- reForge、Python 3.10.11、PyTorch 2.9.0+cu128
+- Forge Neo 2.29.2、Python 3.13.12、PyTorch 2.13.0+cu130
 
 ---
 
