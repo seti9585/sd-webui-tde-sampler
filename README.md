@@ -1,362 +1,326 @@
 # sd-webui-TDE-Sampler
 
-**EN** | [日本語](#日本語)
+English | [日本語](#日本語)
 
-TDE Sampler is a sampler extension for Stable Diffusion WebUI (reForge / Forge Neo) that uses numerical methods for solving **ODEs (ordinary differential equations)** to generate images. Its ODE integration is powered by [torchdiffeq](https://github.com/rtqichen/torchdiffeq).
+TDE Sampler is a sampler extension for reForge / Forge Neo that generates images using numerical methods for solving ODEs (ordinary differential equations). It uses [torchdiffeq](https://github.com/rtqichen/torchdiffeq) and provides 14 solvers.
 
-It is designed to use ODE methods in **both txt2img and Hires.fix**, with a separate solver choice for each pass, and to work alongside other samplers.
+It is designed to use ODE methods in both txt2img and Hires.fix, with a separate choice of method for each pass. You can also use TDE Sampler for only one pass alongside another sampler, or combine RK Sampler and TDE Sampler across the two passes.
 
-- **Fixed-step methods use the WebUI step count.** Adjust the step count for each pass to control how finely it is calculated. Adaptive-step methods instead adjust their step size according to the relative and absolute tolerances.
-- **Use different ODE methods for txt2img and Hires.fix.** Just as you can choose different samplers for the two passes, you can choose a different TDE Sampler solver for each.
-- **Use TDE Sampler for only one pass, or combine RK and TDE.** You can pair TDE Sampler in txt2img with another sampler in Hires.fix, or the other way around. The `→ RK Sampler` option also lets RK Sampler and TDE Sampler hand a pass to each other when both extensions are installed.
+[Installation and tested environments](#installation-and-tested-environments) · [Usage](#usage) · [Adjusting computation and accuracy](#adjusting-computation-and-accuracy) · [Method reference](#method-reference)
 
-Port of [ComfyUI-ODE](https://github.com/redhottensors/ComfyUI-ODE) by redhottensors.
+## Installation and tested environments
 
-> In reForge, this extension registers as an independent sampler, separate from the built-in ODE Custom.
+In Extensions → Install from URL, enter:
 
----
+```text
+https://github.com/seti9585/sd-webui-tde-sampler
+```
 
-## Features
-
-- Registers **14 solvers** as the **"TDE Sampler"** entry in the sampling method dropdown.
-- **txt2img and Hires.fix can use different solvers** via the Script accordion.
-- Variable-step solvers adjust step size automatically to meet the tolerance targets.
-- Fixed-step solvers follow the WebUI step count like standard samplers.
-- The tolerance sliders are **greyed out automatically** when the selected solver does not use them (any fixed-step solver, `Use same sampler`, or `→ RK Sampler`).
-- Supports **Flow Matching models** (Anima / FLUX / SD3) with correct noise injection in Hires.fix.
-- Parameters (relative tolerance / absolute tolerance / max steps) can be set per-generation in the Script UI, overriding the Settings tab defaults.
-- Generation parameters are embedded in PNG infotext for reproducibility.
-
----
-
-## Dependency
+The dependency is `torchdiffeq`. If needed, install it in the Python environment used by your WebUI:
 
 ```bash
 pip install torchdiffeq
 ```
 
-No other packages are needed beyond what is already included in your WebUI.
+Restart the WebUI after installation. This extension uses Forge backend sampling functions and does not support A1111 (AUTOMATIC1111). In reForge, it registers separately from the built-in ODE Custom.
 
-> This extension relies on the Forge backend sampling functions.  
-> It is not available in A1111 (AUTOMATIC1111).
-
----
-
-## Tested on
+Tested environments:
 
 - reForge, Python 3.10.11, PyTorch 2.9.0+cu128
 - Forge Neo 2.29.2, Python 3.13.12, PyTorch 2.13.0+cu130
 
----
-
-## Installation
-
-**Extensions → Install from URL:**
-
-```
-https://github.com/seti9585/sd-webui-TDE-Sampler
-```
-
----
-
 ## Usage
 
-### Sampler dropdown
+### Choose the sampler, then its ODE method
 
-Select **"TDE Sampler"** from the sampling method dropdown.  
-When the Script accordion is disabled or set to **"Use same sampler"**, sampling is
-delegated to the solver selected in the main sampler dropdown.
+The WebUI sampler dropdowns select which sampler runs. The Script controls select which ODE method TDE Sampler uses.
 
-### Script accordion
+1. Select `TDE Sampler` in Sampling method. To use it for Hires.fix too, select `TDE Sampler` there as well, or let Hires.fix use the same sampler as txt2img.
+2. Enable the `TDE Sampler` accordion in the Script section.
+3. Choose an ODE method in `txt2img Solver` and `hires.fix Solver` for each pass you use.
+4. Adjust the WebUI step count for a fixed-step method, or the tolerances for an adaptive-step method, then generate.
 
-Expand the **"TDE Sampler"** accordion in the script section to configure:
+Selecting a method in the Script section does not change the WebUI sampler selection.
 
-| Control | Description |
+### Combine txt2img and Hires.fix samplers
+
+| Combination | WebUI txt2img sampler | WebUI Hires.fix sampler | Script controls to configure |
+|---|---|---|---|
+| TDE Sampler for both passes | `TDE Sampler` | `TDE Sampler` or same as txt2img | Choose the solver for each pass |
+| TDE Sampler for txt2img only | `TDE Sampler` | Another sampler | Choose the txt2img solver |
+| TDE Sampler for Hires.fix only | Another sampler | `TDE Sampler` | Choose the Hires.fix solver |
+| RK for txt2img, TDE for Hires.fix | `RK Sampler` | `TDE Sampler` | RK's txt2img Method and TDE's hires.fix Solver |
+
+To combine RK and TDE, install both extensions and enable both Script accordions. The reverse combination—TDE for txt2img and RK for Hires.fix—also works.
+
+### Special dropdown choices
+
+| Choice | Behavior |
 |---|---|
-| **txt2img Solver** | Solver used for txt2img (and img2img). |
-| **hires.fix Solver** | Solver used for the Hires.fix pass only. |
-| **Log Relative Tolerance** | `10^x` relative tolerance (rtol) for variable-step solvers. |
-| **Log Absolute Tolerance** | `10^x` absolute tolerance (atol) for variable-step solvers. |
-| **Max ODE Steps** | Step count cap for variable-step solvers. |
+| `Use same sampler` | Delegates to the default sampler instead of using this extension's ODE methods |
+| `→ RK Sampler` | Hands this pass to RK Sampler, using that extension's method and settings for the same pass |
 
-Special values for both solver dropdowns:
+The fallback for `Use same sampler` is the WebUI `sampler_name` setting, or Euler if that setting is absent. It does not automatically read the txt2img or Hires.fix sampler dropdown. To combine this extension with another sampler, select the samplers explicitly as shown in the table.
 
-- **Use same sampler** — Delegates to the sampler selected in the dropdown.
-- **→ RK Sampler** — Routes to RK Sampler for that pass.
+When using `→ RK Sampler`, enable the receiving extension's Script accordion and select a concrete method for that pass. Do not create a circular route from RK to TDE and back to RK for the same pass.
 
-> The tolerance sliders are enabled only while a variable-step solver is selected.
-> For fixed-step solvers, `Use same sampler`, and `→ RK Sampler`, the sliders are
-> greyed out because rtol / atol are not used. Their values are preserved and
-> reappear when a variable-step solver is selected again.
+## Adjusting computation and accuracy
 
----
+### Fixed and adaptive steps
 
-## ODE Formulation
+| Type | What to adjust | Behavior |
+|---|---|---|
+| Fixed-step | WebUI step count and scheduler for each pass | Follows the supplied sigma schedule |
+| Adaptive-step | Relative and absolute tolerances | Adjusts step size using an error estimate |
 
-```
+For fixed-step methods, the step count determines how finely the calculation is divided. Tolerances and Max ODE Steps are not used. Different methods perform different numbers of model evaluations per step, so equal step counts do not imply equal generation times.
+
+Adaptive methods do not use the WebUI step count as their integration step count. They take the sigma range from the WebUI settings, then choose their steps using the tolerances.
+
+### Reading the tolerances
+
+txt2img and Hires.fix each have their own Log Relative Tolerance and Log Absolute Tolerance controls. The Script values apply to the current generation.
+
+- Log Relative Tolerance: `rtol = 10^x`, an error target relative to the size of the values being integrated.
+- Log Absolute Tolerance: `atol = 10^x`, an absolute error target that also applies near zero.
+
+For example, `−3` means `0.001`, and `−4` means `0.0001`. More negative values set stricter tolerances and usually require more computation. These control numerical accuracy, not the visual quality of an image directly. Set Log Relative Tolerance greater than or equal to Log Absolute Tolerance.
+
+The tolerance sliders are greyed out for fixed-step methods, `Use same sampler`, and `→ RK Sampler`, because those choices do not use this extension's tolerances. Values are preserved when you switch back to an adaptive method.
+
+### Advanced settings and defaults
+
+Persistent defaults are available under Settings → TDE Sampler. The Script's Advanced Settings are shared by txt2img and Hires.fix.
+
+| Control | Default | Range | Purpose |
+|---|---|---|---|
+| Log Relative Tolerance | −3.0 | −7.0 to 0.0 | Relative tolerance for adaptive methods |
+| Log Absolute Tolerance | −4.0 | −7.0 to 0.0 | Absolute tolerance for adaptive methods |
+| Max ODE Steps | 250 | 1 to 500 | Step cap for adaptive methods |
+
+If an adaptive method reaches the step cap (`max_num_steps exceeded`), loosen the tolerances or raise Max ODE Steps. Strict tolerances can exhaust the cap, particularly in the narrow sigma range used by Hires.fix.
+
+## Method reference
+
+“Order” describes a mathematical accuracy property of the numerical method. A higher order does not directly imply a better-looking image.
+
+### Adaptive-step
+
+| Method | Algorithm | Order |
+|---|---|---|
+| `dopri5` | Dormand–Prince | 5 |
+| `dopri8` | Dormand–Prince | 8 |
+| `bosh3` | Bogacki–Shampine | 3 |
+| `fehlberg2` | Fehlberg | 2 |
+| `adaptive_heun` | Heun | 2 |
+
+### Fixed-step
+
+| Method | Algorithm | Order |
+|---|---|---|
+| `euler` | Euler | 1 |
+| `midpoint` | Midpoint | 2 |
+| `heun3` | Heun | 3 |
+| `ralston3` | Ralston | 3 |
+| `wray3` | van der Houwen / Wray | 3 |
+| `ssprk3` | Strong Stability Preserving RK | 3 |
+| `kutta4` | Classical Runge–Kutta | 4 |
+| `kutta_38th4` | Runge–Kutta 3/8-rule | 4 |
+| `ralston4` | Ralston | 4 |
+
+### Older images labeled `rk4`
+
+torchdiffeq's built-in `rk4` uses Kutta's 3/8-rule. This extension distinguishes classical RK4 as `kutta4` and the 3/8-rule as `kutta_38th4`. To reproduce older images labeled `TDE solver: rk4`, select `kutta_38th4`.
+
+## Technical details
+
+### ODE formulation
+
+```text
 dx/dσ = (x − D(x, σ)) / σ
 ```
 
-`D(x, σ)` is the denoised latent predicted by the model at noise level σ.  
-The probability-flow ODE is integrated from σ_max down to σ_min.
+`x` is the current latent, `σ` is the noise level, and `D(x, σ)` is the denoised latent predicted by the model. The probability-flow ODE is integrated from higher to lower noise levels.
 
----
+Adaptive methods integrate in float64 in CUDA environments. Fixed-step methods use float32 to match standard k-diffusion samplers. Inputs to the denoising model are cast to float32.
 
-## Solvers
+TDE Sampler also supports Hires.fix noise injection for Flow Matching models such as Anima, FLUX, and SD3.
 
-### Variable Step
+### Settings recorded in PNGs
 
-Step size is determined automatically to satisfy the relative tolerance (rtol) and
-absolute tolerance (atol) targets. The scheduler type and step count are used only
-for the sigma range; the actual number of ODE evaluations is controlled by the
-tolerances. In CUDA environments, integration is performed in float64 for accurate
-error estimation.
+The method and tolerances are written to PNG infotext separately for txt2img and Hires.fix.
 
-| Method | Algorithm | Order | Notes |
-|---|---|---|---|
-| `dopri5` | Dormand–Prince | 5 | The most widely used variable-step ODE solver. Well-balanced general-purpose choice. |
-| `dopri8` | Dormand–Prince | 8 | Higher-order variant. Highest accuracy at highest cost. |
-| `bosh3` | Bogacki–Shampine | 3 | Lightweight. Efficient when looser tolerances are acceptable. |
-| `fehlberg2` | Fehlberg | 2 | Low order. Fast, but needs tighter tolerances to converge cleanly. |
-| `adaptive_heun` | Heun | 2 | Simplest variable-step solver. Like `fehlberg2`, benefits from tighter tolerances. |
-
-### Fixed Step
-
-Fixed-step solvers ignore the tolerances and step exactly along the sigma schedule,
-using the WebUI step count directly. Because they have no per-step error control,
-their accuracy depends strongly on the step count.
-
-| Method | Algorithm | Order | Notes |
-|---|---|---|---|
-| `euler` | Euler | 1 | Simplest method. Fastest per step. |
-| `midpoint` | Midpoint | 2 | Slightly smoother than Euler. |
-| `heun3` | Heun | 3 | Heun's 3rd-order method. |
-| `ralston3` | Ralston | 3 | 3rd-order with reduced truncation error. |
-| `wray3` | van der Houwen / Wray | 3 | 3rd-order variant. |
-| `ssprk3` | Strong Stability Preserving RK | 3 | 3rd-order SSP method. |
-| `kutta4` | Classical Runge–Kutta | 4 | Classical RK4 (weights 1/6, 1/3, 1/3, 1/6). Good quality at moderate step counts. |
-| `kutta_38th4` | Runge–Kutta 3/8-rule | 4 | 4th-order 3/8 variant (weights 1/8, 3/8, 3/8, 1/8). |
-| `ralston4` | Ralston | 4 | 4th-order minimizing truncation error. |
-
-> **Note on `kutta4` / `kutta_38th4`:** torchdiffeq's built-in `rk4` is actually the
-> Kutta 3/8-rule, not the classical RK4. To keep the naming unambiguous and aligned
-> with RK Sampler, the classical RK4 is exposed here as **`kutta4`** and the 3/8-rule
-> as **`kutta_38th4`**. Earlier builds of this extension recorded `TDE solver: rk4`
-> while running the 3/8-rule; select **`kutta_38th4`** to reproduce those images.
-
----
-
-## Settings
-
-Persistent defaults are available under **Settings → TDE Sampler**.
-
-| Parameter | Default | Range | Description |
-|---|---|---|---|
-| **Log Relative Tolerance** | −3.0 | −7.0 〜 0.0 | `10^x` rtol for variable-step solvers. Smaller = more precise, slower. Must be ≥ the Log Absolute Tolerance. |
-| **Log Absolute Tolerance** | −4.0 | −7.0 〜 0.0 | `10^x` atol for variable-step solvers. Smaller = more precise, slower. Must be ≤ the Log Relative Tolerance. |
-| **Max ODE Steps** | 250 | 1 〜 5000 | Failsafe step count cap for variable-step solvers. Has no effect on fixed-step solvers. |
-
-> **Note:** Always set the Log Relative Tolerance greater than or equal to the Log Absolute Tolerance.
-
-> **If a variable-step solver stops with `max_num_steps exceeded`:** the tolerances
-> are too strict for the sigma range (this is common in the narrow Hires.fix range).
-> Loosen `log_rtol` / `log_atol`, or raise **Max ODE Steps**. For reference,
-> reForge's built-in Bosh3 uses looser defaults (−2.5 / −3.5) than TDE's (−3.0 / −4.0).
-
----
-
-## Reproducibility
-
-The following parameters are embedded in generated PNG metadata:
-
-```
+```text
 TDE solver, TDE log_rtol, TDE log_atol
 TDE hires solver, TDE hires log_rtol, TDE hires log_atol
 ```
 
----
+Max ODE Steps is not recorded. When regenerating under the same conditions, also match the advanced settings that are not recorded.
 
 ---
 
 # 日本語
 
-**[English](#sd-webui-tde-sampler)** | 日本語
+[English](#sd-webui-tde-sampler)
 
-TDE Sampler は、**ODE（常微分方程式）の数値解法を利用して画像を生成する**、reForge / Forge Neo 向けのサンプラー拡張機能です。ODE の計算には [torchdiffeq](https://github.com/rtqichen/torchdiffeq) を使用します。
+TDE Sampler は、ODE（常微分方程式）の数値解法を利用して画像を生成する、reForge / Forge Neo 向けのサンプラー拡張機能です。[torchdiffeq](https://github.com/rtqichen/torchdiffeq) を使い、14種類のソルバーから解法を選べます。
 
-**txt2img と Hires.fix の両方で ODE の解法を使え、それぞれの解法を個別に選べること**、そして**他のサンプラーと組み合わせて使えること**を意図した設計です。
+txt2img と Hires.fix の両方で ODE を使い、それぞれ異なる解法を選べる設計です。片方だけを TDE Sampler にして他のサンプラーと組み合わせたり、RK Sampler と TDE Sampler を両段階で使い分けたりすることもできます。
 
-- **固定ステップ法は、WebUI のステップ数で計算の細かさを決めます。** txt2img と Hires.fix それぞれのステップ数で調整できます。可変ステップ法は、相対・絶対許容誤差に応じてステップ幅を自動調整します。
-- **txt2img と Hires.fix で、異なる ODE の解法を選べます。** 両段階でサンプラーを使い分けるのと同じように、TDE Sampler のソルバーも個別に設定できます。
-- **片方だけ TDE Sampler を使うことも、RK と TDE を連携させることもできます。** txt2img は TDE Sampler、Hires.fix は別のサンプラー、という組み合わせや、その逆も可能です。両拡張機能を導入していれば、`→ RK Sampler` でその段階の処理をもう一方に渡すこともできます。
+[導入と動作確認環境](#導入と動作確認環境) · [使い方](#使い方) · [計算量と精度の調整](#計算量と精度の調整) · [解法一覧](#解法一覧)
 
-[ComfyUI-ODE](https://github.com/redhottensors/ComfyUI-ODE)（redhottensors 作）を Forge 系 WebUI 向けに移植。
+## 導入と動作確認環境
 
-> reForge では、組み込みの ODE Custom とは独立したサンプラーとして登録されます。
+Extensions → Install from URL に次のURLを入力します。
 
----
+```text
+https://github.com/seti9585/sd-webui-tde-sampler
+```
 
-## 特徴
-
-- Sampling method ドロップダウンに **14 種類のソルバー**を **「TDE Sampler」** として登録。
-- **txt2img と Hires.fix で異なるソルバー**を Script アコーディオンで選択可能。
-- 可変ステップ法は許容誤差の目標値を満たすようステップ幅を自動調整。
-- 固定ステップ法は標準サンプラーと同様に WebUI のステップ数に従う。
-- 選択中のソルバーが許容誤差を使わない場合（すべての固定ステップ法、`Use same sampler`、`→ RK Sampler`）、許容誤差スライダーは**自動的にグレーアウト**されます。
-- Hires.fix での **Flow Matching モデル**（Anima / FLUX / SD3 等）の正しいノイズ注入に対応。
-- パラメータ（相対許容誤差 / 絶対許容誤差 / 最大ステップ数）は Script UI で生成ごとに上書き可能（Settings タブのデフォルトより優先）。
-- 生成パラメータは PNG の infotext に記録され再現性を保持。
-
----
-
-## 依存ライブラリ
+依存ライブラリは `torchdiffeq` です。必要な場合は、WebUI が使う Python 環境でインストールしてください。
 
 ```bash
 pip install torchdiffeq
 ```
 
-WebUI に既に含まれるもの以外、追加パッケージは不要です。
+導入後は WebUI を再起動してください。Forge バックエンドの sampling 関数を使うため、A1111（AUTOMATIC1111）では使用できません。reForge では、組み込みの ODE Custom とは別のサンプラーとして登録されます。
 
-> 本拡張機能は Forge バックエンドの sampling 関数に依存します。  
-> A1111（AUTOMATIC1111）では使用できません。
-
----
-
-## 動作確認環境
+動作確認環境：
 
 - reForge、Python 3.10.11、PyTorch 2.9.0+cu128
 - Forge Neo 2.29.2、Python 3.13.12、PyTorch 2.13.0+cu130
 
----
-
-## インストール
-
-**Extensions → Install from URL:**
-
-```
-https://github.com/seti9585/sd-webui-TDE-Sampler
-```
-
----
-
 ## 使い方
 
-### Sampler ドロップダウン
+### サンプラーと解法を選ぶ
 
-Sampling method ドロップダウンから **「TDE Sampler」** を選択します。  
-Script アコーディオンが無効、または **「Use same sampler」** の場合は、メインの
-サンプラードロップダウンで選択中のソルバーに処理を委譲します。
+WebUI のサンプラー欄では「どのサンプラーを使うか」、Script 欄では「TDE Sampler がどの解法を使うか」を設定します。
 
-### Script アコーディオン
+1. Sampling method で `TDE Sampler` を選びます。Hires.fix にも使う場合は、Hires.fix のサンプラーも `TDE Sampler` にするか、txt2img と同じサンプラーを使う設定にします。
+2. Script 欄の `TDE Sampler` アコーディオンを有効にします。
+3. `txt2img Solver` と `hires.fix Solver` で、それぞれ使う解法を選びます。
+4. 固定ステップ法なら WebUI のステップ数、可変ステップ法なら許容誤差を調整して生成します。
 
-Script セクションの **「TDE Sampler」** アコーディオンを展開して設定します。
+Script 欄で解法を選ぶだけでは、WebUI のサンプラー選択は切り替わりません。
 
-| 項目 | 説明 |
+### txt2img と Hires.fix を使い分ける
+
+| 使いたい組み合わせ | WebUI の txt2img サンプラー | WebUI の Hires.fix サンプラー | Script 欄で設定する解法 |
+|---|---|---|---|
+| 両方 TDE Sampler | `TDE Sampler` | `TDE Sampler` または txt2img と同じ | txt2img／Hires.fix のソルバーをそれぞれ選ぶ |
+| txt2img だけ TDE Sampler | `TDE Sampler` | 他のサンプラー | txt2img のソルバーを選ぶ |
+| Hires.fix だけ TDE Sampler | 他のサンプラー | `TDE Sampler` | Hires.fix のソルバーを選ぶ |
+| txt2img は RK、Hires.fix は TDE | `RK Sampler` | `TDE Sampler` | RK の txt2img Method と TDE の hires.fix Solver を選ぶ |
+
+RK と TDE を組み合わせる場合は、両拡張機能を導入し、両方の Script アコーディオンを有効にします。上の表の逆に、txt2img を TDE、Hires.fix を RK にすることもできます。
+
+### 解法ドロップダウンの特殊な選択肢
+
+| 選択肢 | 動作 |
 |---|---|
-| **txt2img Solver** | txt2img（および img2img）で使うソルバー。 |
-| **hires.fix Solver** | Hires.fix パスでのみ使うソルバー。 |
-| **Log Relative Tolerance** | 可変ステップ法の `10^x` 相対許容誤差（rtol）。 |
-| **Log Absolute Tolerance** | 可変ステップ法の `10^x` 絶対許容誤差（atol）。 |
-| **Max ODE Steps** | 可変ステップ法のステップ数上限。 |
+| `Use same sampler` | この拡張機能の ODE 解法を使わず、既定のサンプラーへ処理を渡す |
+| `→ RK Sampler` | その段階の処理を RK Sampler に渡し、渡した先の同じ段階の解法と設定を使う |
 
-両ソルバードロップダウンの特殊値：
+`Use same sampler` の委譲先は WebUI の `sampler_name` 設定で、設定がなければ Euler です。txt2img／Hires.fix のサンプラー欄を自動的に参照して切り替える選択肢ではありません。他のサンプラーと組み合わせる場合は、上の表のように WebUI の各サンプラー欄で選ぶと明確です。
 
-- **Use same sampler** — ドロップダウンで選択中のサンプラーに委譲。
-- **→ RK Sampler** — そのパスを RK Sampler に委譲。
+`→ RK Sampler` を使う場合は、渡した先の Script アコーディオンも有効にし、該当する段階で具体的な解法を選んでください。同じ段階で RK → TDE → RK と相互に渡す設定にはしないでください。
 
-> 許容誤差スライダーは可変ステップ法を選択している間だけ有効です。
-> 固定ステップ法・`Use same sampler`・`→ RK Sampler` では rtol / atol が使われない
-> ため、スライダーはグレーアウトされます。値は保持され、可変ステップ法を再び選ぶと
-> 元の値が復活します。
+## 計算量と精度の調整
 
----
+### 固定ステップ法と可変ステップ法
 
-## ODE の定式化
+| 種類 | 調整する項目 | 動作 |
+|---|---|---|
+| 固定ステップ法 | WebUI の txt2img／Hires.fix のステップ数とスケジューラ | 指定した sigma スケジュールに沿って計算する |
+| 可変ステップ法 | 相対・絶対許容誤差 | 推定誤差に応じてステップ幅を調整する |
 
-```
-dx/dσ = (x − D(x, σ)) / σ
-```
+固定ステップ法では、ステップ数が計算の細かさを決めます。許容誤差と Max ODE Steps は使いません。解法ごとに1ステップで行うモデル評価の回数が違うため、同じステップ数でも生成時間は異なります。
 
-`D(x, σ)` はノイズレベル σ におけるモデルの denoised latent 予測値。  
-probability flow ODE を σ_max から σ_min へ降順に積分します。
+可変ステップ法では、WebUI のステップ数をそのまま積分ステップ数として使いません。sigma の範囲は WebUI の設定から取得し、その範囲をどう刻むかは許容誤差で決めます。
 
----
+### 許容誤差の読み方
 
-## ソルバー一覧
+txt2img と Hires.fix にはそれぞれ、Log Relative Tolerance と Log Absolute Tolerance があります。Script 欄の値は、その生成の設定として使われます。
+
+- Log Relative Tolerance：相対許容誤差 `rtol = 10^x`。値の大きさに応じた誤差の基準。
+- Log Absolute Tolerance：絶対許容誤差 `atol = 10^x`。値がゼロに近いときにも使う誤差の基準。
+
+例えば `−3` は `0.001`、`−4` は `0.0001` です。負の値を小さくするほど許容誤差が厳しくなり、通常は計算量が増えます。ODE の計算精度を指定する値であり、画像の見栄えを直接保証する値ではありません。Log Relative Tolerance は Log Absolute Tolerance 以上に設定してください。
+
+固定ステップ法、`Use same sampler`、`→ RK Sampler` を選ぶと、こちらの許容誤差スライダーは使われないためグレーアウトします。値は保持され、可変ステップ法に戻すと再び使えます。
+
+### 詳細設定と既定値
+
+Settings → TDE Sampler で既定値を設定できます。Script 欄の Advanced Settings は txt2img と Hires.fix で共通です。
+
+| 項目 | 既定値 | 範囲 | 用途 |
+|---|---|---|---|
+| Log Relative Tolerance | −3.0 | −7.0 ～ 0.0 | 可変ステップ法の相対許容誤差 |
+| Log Absolute Tolerance | −4.0 | −7.0 ～ 0.0 | 可変ステップ法の絶対許容誤差 |
+| Max ODE Steps | 250 | 1 ～ 500 | 可変ステップ法のステップ数上限 |
+
+可変ステップ法がステップ数上限（`max_num_steps exceeded`）で停止する場合は、許容誤差を緩めるか、Max ODE Steps を増やしてください。特に Hires.fix の狭い sigma 範囲では、厳しい許容誤差で上限に達することがあります。
+
+## 解法一覧
+
+「次数」は数値解法の精度に関する数学的な性質です。高い次数が、そのまま画像の見栄えの良さを意味するわけではありません。
 
 ### 可変ステップ法
 
-ステップ幅は相対許容誤差（rtol）と絶対許容誤差（atol）の目標値を満たすよう自動決定
-されます。スケジューラの種類やステップ数は sigma の範囲にのみ使用され、実際の ODE
-評価回数は許容誤差で制御されます。CUDA 環境では精度の高い誤差推定のため float64 で
-積分を実行します。
-
-| メソッド | アルゴリズム | 次数 | 特徴 |
-|---|---|---|---|
-| `dopri5` | Dormand–Prince | 5 | 最も広く使われる可変ステップ ODE ソルバー。バランスの取れた汎用ソルバー。 |
-| `dopri8` | Dormand–Prince | 8 | 高次版。最高精度だが最も低速。 |
-| `bosh3` | Bogacki–Shampine | 3 | 軽量。許容誤差を緩めても許容できる場面で効率的。 |
-| `fehlberg2` | Fehlberg | 2 | 低次。高速だが、きれいに収束させるには許容誤差を厳しめにする必要がある。 |
-| `adaptive_heun` | Heun | 2 | 最もシンプルな可変ステップソルバー。`fehlberg2` 同様、許容誤差を厳しめにすると安定する。 |
+| メソッド | アルゴリズム | 次数 |
+|---|---|---|
+| `dopri5` | Dormand–Prince | 5 |
+| `dopri8` | Dormand–Prince | 8 |
+| `bosh3` | Bogacki–Shampine | 3 |
+| `fehlberg2` | Fehlberg | 2 |
+| `adaptive_heun` | Heun | 2 |
 
 ### 固定ステップ法
 
-固定ステップ法は許容誤差を無視し、sigma スケジュールに沿って正確に刻みます。WebUI の
-ステップ数をそのまま使用します。1 ステップごとの誤差制御を持たないため、精度はステップ
-数への依存度が高くなります。
+| メソッド | アルゴリズム | 次数 |
+|---|---|---|
+| `euler` | Euler | 1 |
+| `midpoint` | Midpoint | 2 |
+| `heun3` | Heun | 3 |
+| `ralston3` | Ralston | 3 |
+| `wray3` | van der Houwen / Wray | 3 |
+| `ssprk3` | Strong Stability Preserving RK | 3 |
+| `kutta4` | 古典的 Runge–Kutta | 4 |
+| `kutta_38th4` | Runge–Kutta 3/8 則 | 4 |
+| `ralston4` | Ralston | 4 |
 
-| メソッド | アルゴリズム | 次数 | 特徴 |
-|---|---|---|---|
-| `euler` | Euler | 1 | 最もシンプル。1 ステップあたりが最速。 |
-| `midpoint` | Midpoint | 2 | Euler より若干なめらか。 |
-| `heun3` | Heun | 3 | Heun の 3 次法。 |
-| `ralston3` | Ralston | 3 | 打ち切り誤差を抑えた 3 次法。 |
-| `wray3` | van der Houwen / Wray | 3 | 3 次のバリアント。 |
-| `ssprk3` | Strong Stability Preserving RK | 3 | 3 次の SSP 法。 |
-| `kutta4` | 古典的 Runge–Kutta | 4 | 古典的 RK4（重み 1/6, 1/3, 1/3, 1/6）。中程度のステップ数で高品質。 |
-| `kutta_38th4` | Runge–Kutta 3/8 則 | 4 | 4 次の 3/8 則バリアント（重み 1/8, 3/8, 3/8, 1/8）。 |
-| `ralston4` | Ralston | 4 | 打ち切り誤差を最小化する 4 次法。 |
+### 旧バージョンの `rk4` について
 
-> **`kutta4` / `kutta_38th4` についての注意：** torchdiffeq 組み込みの `rk4` は、実際には
-> 古典的 RK4 ではなく Kutta の 3/8 則です。命名を明確にし RK Sampler と揃えるため、本拡張
-> では古典的 RK4 を **`kutta4`**、3/8 則を **`kutta_38th4`** として登録しています。旧バージョン
-> では 3/8 則を動かしながら `TDE solver: rk4` と記録していたため、その画像を再現するには
-> **`kutta_38th4`** を選択して下さい。
+torchdiffeq 組み込みの `rk4` は Kutta の3/8則です。本拡張機能では、古典的 RK4 を `kutta4`、3/8則を `kutta_38th4` と区別しています。旧バージョンの `TDE solver: rk4` を再現する場合は、`kutta_38th4` を選んでください。
 
----
+## 技術的な詳細
 
-## Settings
+### ODE の定式化
 
-**Settings → TDE Sampler** でデフォルト値を永続的に設定できます。
-
-| パラメータ | デフォルト | 範囲 | 説明 |
-|---|---|---|---|
-| **Log Relative Tolerance** | −3.0 | −7.0 〜 0.0 | 可変ステップソルバーの `10^x` rtol。小さいほど高精度・低速。Log Absolute Tolerance 以上にする。 |
-| **Log Absolute Tolerance** | −4.0 | −7.0 〜 0.0 | 可変ステップソルバーの `10^x` atol。小さいほど高精度・低速。Log Relative Tolerance 以下にする。 |
-| **Max ODE Steps** | 250 | 1 〜 5000 | 可変ステップソルバーのステップ数上限（フェイルセーフ）。固定ステップ法には影響しない。 |
-
-> **注意：** Log Relative Tolerance は必ず Log Absolute Tolerance 以上にして下さい。
-
-> **可変ステップソルバーが `max_num_steps exceeded` で停止した場合：** 許容誤差が sigma の
-> 範囲に対して厳しすぎます（狭い Hires.fix の範囲で起こりやすい）。`log_rtol` / `log_atol`
-> を緩めるか、**Max ODE Steps** を上げて下さい。参考として、reForge 組み込みの Bosh3 は
-> TDE のデフォルト（−3.0 / −4.0）より緩い −2.5 / −3.5 を既定値としています。
-
----
-
-## 再現性
-
-生成された PNG のメタデータには以下のパラメータが記録されます。
-
+```text
+dx/dσ = (x − D(x, σ)) / σ
 ```
+
+`x` は計算中の latent、`σ` はノイズレベル、`D(x, σ)` はモデルが予測した denoised latent です。この probability-flow ODE を、高いノイズレベルから低いノイズレベルへ積分します。
+
+可変ステップ法は CUDA 環境では float64 で積分し、固定ステップ法は標準の k-diffusion サンプラーに合わせて float32 を使います。モデルへの入力は float32 に揃えます。
+
+TDE Sampler は Flow Matching モデル（Anima / FLUX / SD3 等）の Hires.fix におけるノイズ注入にも対応しています。
+
+### PNG に記録する設定
+
+使用した解法と許容誤差を txt2img／Hires.fix 別に PNG の infotext に記録します。
+
+```text
 TDE solver, TDE log_rtol, TDE log_atol
 TDE hires solver, TDE hires log_rtol, TDE hires log_atol
 ```
 
----
+Max ODE Steps は記録されません。同じ条件で再生成する場合は、記録されない詳細設定も揃えてください。
 
-## License
+## License / ライセンス
 
 MIT License — Original port: [ComfyUI-ODE](https://github.com/redhottensors/ComfyUI-ODE) © redhottensors
 
 The fixed-step Runge–Kutta tableaux (`kutta4`, `kutta_38th4`, `ralston3`, `ralston4`, `wray3`, `ssprk3`) match those of [ComfyUI-RK-Sampler](https://github.com/memmaptensor/ComfyUI-RK-Sampler) © memmaptensor, so each is the torchdiffeq-path counterpart of the corresponding RK Sampler method.
+
