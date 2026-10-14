@@ -29,6 +29,14 @@ Tested environments:
 - reForge, Python 3.10.11, PyTorch 2.9.0+cu128
 - Forge Neo 2.29.2, Python 3.13.12, PyTorch 2.13.0+cu130
 
+## Compatibility with Spectrum extensions
+
+When using U-Net models, [Forge Neo's built-in Spectrum (`sd_forge_spectrum`)](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo/extensions-builtin/sd_forge_spectrum) and hirorohi03's [sd-forge-spectrum-faithful](https://github.com/hirorohi03/sd-forge-spectrum-faithful) are not designed for higher-order sampling methods that evaluate the U-Net multiple times within one solver step. Using them with these methods can stop generation with an error.
+
+These Spectrum extensions manage forecasting progress by counting U-Net calls, without grouping the internal stages of a solver step. In multi-stage ODE methods, one U-Net call is not one solver step, so their progress and forecast-history handling do not match the sampler's integration.
+
+If you want to use Spectrum-style acceleration alongside this sampler, try my [sd-webui-ChebyCast](https://github.com/seti9585/sd-webui-ChebyCast) instead. Disable the built-in Spectrum and spectrum-faithful extensions before enabling ChebyCast. It distinguishes solver steps from individual U-Net calls and supports fixed-step multi-stage methods. Use `Stage grouping = auto` for TDE / RK Sampler. ChebyCast does not support adaptive ODE methods.
+
 ## Usage
 
 ### Choose the sampler, then its ODE method
@@ -189,6 +197,14 @@ pip install torchdiffeq
 
 - reForge、Python 3.10.11、PyTorch 2.9.0+cu128
 - Forge Neo 2.29.2、Python 3.13.12、PyTorch 2.13.0+cu130
+
+## Spectrum 拡張機能との併用
+
+U-Net モデルでは、[Forge Neo 内蔵の Spectrum（`sd_forge_spectrum`）](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo/extensions-builtin/sd_forge_spectrum) と、ひろろひ氏（hirorohi03）の [sd-forge-spectrum-faithful](https://github.com/hirorohi03/sd-forge-spectrum-faithful) は、1つの積分ステップ内で U-Net を複数回呼び出す高次の Sampling Method を想定していません。これらのメソッドと併用すると、生成がエラー停止することがあります。
+
+これらの Spectrum 拡張機能は、U-Net の呼び出し回数をもとに予測の進行を管理し、1ステップ内の複数の内部段階（stage）をまとめて扱いません。多段の ODE 解法では「U-Net 呼び出し1回」と「積分ステップ1回」が一致しないため、進行や予測履歴の管理がサンプラーの計算と合わなくなります。
+
+スペクトラム拡張機能を併用する場合は、拙作の [sd-webui-ChebyCast](https://github.com/seti9585/sd-webui-ChebyCast) を試してみてください。内蔵 Spectrum と spectrum-faithful を無効にし、代わりに ChebyCast を有効にします。ChebyCast は積分ステップと個々の U-Net 呼び出しを分けて扱い、固定ステップの多段法に対応しています。TDE / RK Sampler では `Stage grouping = auto` を使ってください。可変ステップの ODE 解法には対応していません。
 
 ## 使い方
 
